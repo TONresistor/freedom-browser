@@ -233,9 +233,11 @@ async function verifyCheckpoint(chainId, dependencies = {}) {
   const now = dependencies.now || Date.now;
   // Lazy import: tests may inspect helpers in the main thread. Production only
   // initializes Colibri here, inside the disposable worker.
-  const { Colibri, Strategy, decode_proof } =
+  const { Colibri, Strategy, decode_proof, clientVersion } =
     dependencies.runtime || require('../ens/colibri-runtime');
-  if (typeof decode_proof !== 'function') throw checkpointError('CHECKPOINT_INCOMPATIBLE');
+  if (typeof decode_proof !== 'function' || !Number.isSafeInteger(clientVersion) || clientVersion <= 0) {
+    throw checkpointError('CHECKPOINT_INCOMPATIBLE');
+  }
   const storage = new Map();
   const observations = [];
   const quorumRequests = new Map();
@@ -300,7 +302,7 @@ async function verifyCheckpoint(chainId, dependencies = {}) {
         body: JSON.stringify({
           method: 'eth_getBlockByNumber',
           params: ['latest', false],
-          version: 131078,
+          version: clientVersion,
           zk_proof: true,
         }),
       },

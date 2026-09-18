@@ -35,5 +35,10 @@ process.env.C4_DISABLE_NATIVE = '1';
 
 const Colibri = require('@corpus-core/colibri-stateless').default;
 const { Strategy, decode_proof } = require('@corpus-core/colibri-stateless');
+// Provers route legacy and v3 proof formats using the encoded client version.
+// Manual proof requests must advertise the installed verifier's version, too.
+const clientVersion = require('@corpus-core/colibri-stateless/package.json')
+  .version.split('.')
+  .reduce((version, part) => version * 256 + Number(part), 0);
 
-module.exports = { Colibri, Strategy, decode_proof };
+module.exports = { Colibri, Strategy, decode_proof, clientVersion };

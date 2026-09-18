@@ -57,6 +57,7 @@ describe('colibri-runtime disables the native addon before the package loads', (
     delete process.env.C4_DISABLE_NATIVE;
     expect(loadWithEnvProbe()).toBe('1');
     expect(process.env.C4_DISABLE_NATIVE).toBe('1');
+    expect(require('./colibri-runtime').clientVersion).toBe(196608);
   });
 
   test('overrides an inherited C4_DISABLE_NATIVE=0 rather than honoring it', () => {
