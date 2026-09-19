@@ -5,6 +5,7 @@ This directory contains task-specific guidance referenced by `AGENTS.md`.
 Use these files on demand:
 
 - `architecture-boundaries.md`: guardrails for architectural changes.
+- `bundled-binaries.md`: bundled node binaries (Ant, freedom-ipfs, Radicle, Arti) — what they are, where they land, and how to bump a pin.
 - `code-style-and-linting.md`: lint-aware implementation workflow.
 - `commit-messages.md`: commit title/body conventions.
 - `changelog-process.md`: release changelog procedure.

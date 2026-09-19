@@ -195,6 +195,16 @@ async function guestScrollbarMask(win) {
   return [win.locator(`#${GUEST_SCROLLBAR_MASK}`)];
 }
 
+// Types into the settings page's own "Search settings" field (#281) the way
+// the page hears a keystroke, so the result list is rendered by the page
+// rather than assembled by the spec.
+const setSearchQuery = (page, query) =>
+  page.evaluate((value) => {
+    const field = document.getElementById('settings-search');
+    field.value = value;
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+  }, query);
+
 const BASELINE_FILES = baselineFiles();
 
 /**
@@ -427,6 +437,17 @@ test.describe('renderer screenshots', () => {
           await page.waitForTimeout(600);
           await shot(`${30 + i}-settings-${section}`);
         }
+        // The page-wide search (#281): the sidebar field with a query, and
+        // the result list that stands in for whichever section was open. The
+        // query is deliberately one only static rows answer — the `[data-tor]`
+        // rows depend on whether the build bundles Arti, which would make
+        // this baseline depend on the checkout it was rendered from.
+        await setSearchQuery(page, 'block');
+        await page.waitForTimeout(600);
+        await shot('44-settings-search');
+        await setSearchQuery(page, '');
+        await page.waitForTimeout(300);
+
         await recipes.shortcutConflict(ctx);
         await shot('45-settings-shortcut-conflict');
         surfaces.tookEverySurface();

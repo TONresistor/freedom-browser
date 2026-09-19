@@ -270,6 +270,7 @@ Access built-in browser pages using the `freedom://` protocol:
 
 ## Settings & UI
 
+- **Search settings**: A search field in the Settings sidebar covers the whole page. Typing filters every section by control label, description and helper line (case-insensitive substring, no fuzzy matching) and lists each match with the section it lives in — so a setting is findable without knowing which of the 14 sections holds it (Tor's startup toggle is under Experimental, a chain's API keys under RPC Providers). Enter, or clicking a result, opens that section and marks the row it found; Esc clears the field and puts the section you were on back. The Shortcuts section keeps its own search field, which filters only that list. The index is read from what each section has on the page at that moment, so a chain is findable by its own name from the Chains list — but not while that list is replaced by a single chain's own page or by the add-chain form; leaving Chains puts the list, and those rows, back.
 - **Theme**: Light, Dark, or System (follows OS preference).
 - **Tabs in Title Bar** (Linux only): Use the tab strip as the window title bar. Takes effect after restart.
 - **Search**: Choose the address-bar search engine, or add a custom one from an HTTPS URL template containing `{searchTerms}`.

@@ -20,6 +20,11 @@ All notable changes to Freedom will be documented in this file.
   - The block shows in the address-bar indicator as "Blocked after repeated dismissals"; Remove there lets the site ask again. It is never saved to disk, and a private window's dismissals stay in that window
 - Linux pacman distribution target for Arch Linux and Omarchy users, next to the existing AppImage and deb, for x64 and arm64
   - Install it with `sudo pacman -U <file>`; in-app updates work from there on, the same as they do for the deb, asking for your password when the new package is installed
+- A "Search settings" field in the Settings sidebar, covering the whole page the way Chrome's does
+  - Type a word and every setting whose label or description contains it is listed with the section it lives in, so finding one no longer means knowing which of the 14 sections it is under — Tor's startup toggle is under Experimental, a chain's API keys under RPC Providers
+  - Enter, or clicking a result, opens that section and marks the row it found; Esc clears the field and puts the section you were on back
+  - What it searches is what each section has on the page at that moment, so a chain is findable by its own name from the Chains list — but not while that list is replaced by a single chain's own page or by the add-chain form; leaving Chains puts the list, and those rows, back
+  - The Shortcuts section keeps its own search field, which still filters only that list
 
 ### Fixed
 
@@ -49,6 +54,11 @@ All notable changes to Freedom will be documented in this file.
   - `navigator.permissions.query()` and `Notification.permission` no longer report "denied" for a site you have never been asked about, so those sites go on to ask and Freedom's own prompt appears instead of their "access is blocked" screen
   - A remembered or this-session Block still reads as denied, and the prompt is unchanged: an undecided site is still asked about, and blocking it still denies
   - macOS builds now carry the camera and microphone entitlements and their usage descriptions, so allowing a site can reach the system prompt and Freedom appears under Privacy & Security instead of being refused before it is ever listed
+
+### Security
+
+- Updated bundled nodes:
+  - [Ant](https://github.com/freedom-hq/ant) 0.5.44 to 0.5.45 — a chain read that fails is no longer taken as a definitive "no": a transient Gnosis RPC error can no longer make the node lose sight of a postage batch you have paid for, nor make it deploy a second chequebook and strand the deposit in the first
 
 ## [0.8.5] - 2026-09-10
 
