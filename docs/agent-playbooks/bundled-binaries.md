@@ -46,9 +46,14 @@ same shape and is covered by `npm run check-binaries` too.
 | Arti         | `arti-bin/<platform>-<arch>/arti` (`arti.exe` on Windows)                                                                                          | `npm run tor:download`     |
 
 `os`/`arch` are this repo's own names (`mac`/`linux`/`win` × `arm64`/`x64`), not
-Node's. Packaged builds flatten `ant-bin/` and `radicle-bin/` into
-`<resources>/` — see `docs/features.md` § the node table. These directories are
-gitignored, so a refresh usually produces no file-tree change.
+Node's. Packaged builds drop the `<os>-<arch>/` level (only the target's own
+binaries ship), so `ant-bin/`, `radicle-bin/` and `arti-bin/` land at
+`<resources>/ant-bin/`, `<resources>/radicle-bin/` and `<resources>/arti-bin/`
+— `extraResources` in `package.json`, read back by `getAntBinaryPath()`
+(`src/main/ant-manager.js`), `candidatePaths()` (`src/main/radicle-embedded.js`)
+and `getArtiBinaryPath()` (`src/main/tor-manager.js`); see also
+`docs/features.md` § the node table. These directories are gitignored, so a
+refresh usually produces no file-tree change.
 
 After any fetch, `npm run check-binaries` checks that every binary/addon a
 target needs is actually on disk (plus, for Myotis, its checkpoint provenance).
@@ -67,9 +72,14 @@ Ports matter when you are judging evidence:
 
 - A Freedom-managed profile gets its own port — base **11633** in packaged
   builds, **21633** in dev (`PACKAGED_PORT_BASE` / `DEV_PORT_BASE` in
-  `src/main/profile-catalog.js`, plus a per-checkout offset and profile slot),
-  and the manager walks upward if the port is busy. `npm run ant:status`
-  defaults to `http://127.0.0.1:11633`.
+  `src/main/profile-catalog.js`), plus the profile slot. `getManagedPorts()`
+  also adds a per-checkout offset, but **in dev only** — it is hard-coded to
+  `0` when `dev` is false, so a packaged build's first profile is 11633 flat,
+  while a dev checkout sits anywhere in 21633–22623 (offset up to +990, so
+  parallel checkouts do not collide). Either way the manager walks upward if
+  the port is busy. `npm run ant:status` defaults to
+  `http://127.0.0.1:11633` — correct for a packaged build, never right for a
+  dev run.
 - **1633** is the ecosystem default, i.e. a _system_ Ant/Bee node
   (`DEFAULTS.ant.apiPort` in `src/main/service-registry.js`;
   `npm run system-ant:start` / `system-ant:status` drive it). If something is
@@ -135,8 +145,19 @@ This is the sequence [#387](https://github.com/solardev-xyz/freedom-browser/pull
    grep -rn '0\.5\.44\|<old-digest-prefix>' --exclude-dir=node_modules --exclude-dir=ant-bin --exclude-dir=.git .
    ```
 
-   Expect hits only in the changelog's own history (the "from" version in the
-   new entry, and older released sections — do not rewrite those).
+   The check is "no stale **pin** survives", not "zero hits" — several hits are
+   expected and must be left alone:
+
+   - `CHANGELOG.md` — the "from" version in the new entry, plus older released
+     sections.
+   - **This playbook** — the worked example named at the top of this section
+     and the sample changelog entry in step 7 both carry a concrete version pair.
+     They are a record of one past bump, not a pin; do not rewrite them to make
+     the grep look clean. (Re-word them only when you are deliberately
+     re-basing this checklist onto a newer bump.)
+
+   Anything outside those two files is a real stale pin. The old digest should
+   be gone entirely — zero hits.
 
 9. **Run the checks.** All of these, not a subset:
 
