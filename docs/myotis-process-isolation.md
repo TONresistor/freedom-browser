@@ -99,6 +99,11 @@ Proofs still come from `mainnet1.colibri-proof.tech` and
 `gnosis.colibri-proof.tech`, respectively, and Colibri proof verification is
 mandatory. There is no reduced-threshold fallback to any prover or RPC server.
 
+Freedom pins Colibri 3.0.0 and advertises the installed verifier's encoded client
+version when requesting proofs. Its v3 proof format is incompatible with the
+older v2 format. [V3 fixtures and qualification](audits/evidence/colibri-v3-2026-09/README.md)
+cover both chains; the WASM runtime remains mandatory.
+
 Each provider gets one vote for the exact requested slot/root only after an
 explicit finality endorsement. If its latest checkpoint has advanced, the
 Checkpointz finalized-history API can endorse the same older block. Mere block

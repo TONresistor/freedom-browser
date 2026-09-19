@@ -44,6 +44,7 @@ function fixture(chainId = 1) {
   let storage;
   let clientConfig;
   const runtime = {
+    clientVersion: 196608,
     Strategy: { VerifiedOnly: 0 },
     Colibri: class {
       static async register_storage(value) {
@@ -97,6 +98,14 @@ function fixture(chainId = 1) {
 }
 
 describe('checkpoint proof/finality policy', () => {
+  test('a runtime without an encoded client version fails before requesting evidence', async () => {
+    const f = fixture();
+    f.runtime.clientVersion = undefined;
+    await expect(verifyCheckpoint(1, f.dependencies)).rejects.toMatchObject({
+      code: 'CHECKPOINT_INCOMPATIBLE',
+    });
+    expect(f.fetch).not.toHaveBeenCalled();
+  });
   test.each([1, 100])(
     'requires exact checkpoint and explicit finality for chain %i',
     async (chainId) => {
@@ -113,6 +122,13 @@ describe('checkpoint proof/finality policy', () => {
         finalizedEpoch: f.slot / f.config.slotsPerEpoch,
       });
       expect(f.runtime.decode_proof).toHaveBeenCalledWith(f.verifyBytes);
+      const proofRequest = f.fetch.mock.calls.find(([url]) => url === f.config.prover);
+      expect(JSON.parse(proofRequest[1].body)).toEqual({
+        method: 'eth_getBlockByNumber',
+        params: ['latest', false],
+        version: 196608, // 3.0.0; requesting v2 proofs breaks the v3 verifier.
+        zk_proof: true,
+      });
       expect(f.clientConfig).toMatchObject({
         checkpointz: [f.config.source],
         beacon_apis: [],
@@ -535,21 +551,24 @@ describe('bounded HTTP bodies', () => {
 // Use the actual pinned WASM in a fresh process; do not confuse mocked policy
 // checks above with cryptographic verification. Responses are public captures,
 // and the clock is restored to capture time so this test is deterministic/offline.
-// Metadata is replayed for each voter: this tests cryptographic integration, not
-// independent real-world quorum observations (covered by the live campaign).
+// Each authority's actual response is replayed separately. These tests make no
+// network requests; the capture script records the live quorum observations.
 describe('captured proofs with the real Colibri WASM', () => {
   beforeAll(() => {
     // These captures qualify this exact verifier/API, not a semver-compatible build.
-    expect(require('@corpus-core/colibri-stateless/package.json').version).toBe('2.0.6');
+    expect(require('@corpus-core/colibri-stateless/package.json').version).toBe('3.0.0');
   });
   test.each(['mainnet', 'gnosis'])(
-    '%s proof verifies; corruption and wrong chain reject',
+    '%s proof verifies; corruption, wrong chain, stale and legacy proofs reject',
     (network) => {
       const dir = path.resolve(
         __dirname,
+        '../../../docs/audits/evidence/colibri-v3-2026-09/captures/' + network
+      );
+      const legacyProofPath = path.resolve(
+        __dirname,
         '../../../docs/audits/evidence/myotis-recovery-spike-2026-09/captures/' +
-          network +
-          '-finalized'
+          network + '-finalized/proof.ssz'
       );
       const workerPath = path.join(__dirname, 'checkpoint-verifier-worker.js');
       expect(fs.existsSync(path.join(dir, 'proof.ssz'))).toBe(true);
@@ -559,25 +578,41 @@ describe('captured proofs with the real Colibri WASM', () => {
       const {verifyCheckpoint} = require(${JSON.stringify(workerPath)});
       const dir = ${JSON.stringify(dir)};
       const original = JSON.parse(fs.readFileSync(path.join(dir, 'verified-checkpoint.json')));
-      Date.now = () => Date.parse(original.verifiedAt);
+      Date.now = () => original.verifiedAt;
       const proof = fs.readFileSync(path.join(dir, 'proof.ssz'));
+      const responses = JSON.parse(fs.readFileSync(path.join(dir, 'responses.json')));
+      const prover = require('./src/main/myotis/checkpoint-verifier').CHECKPOINT_NETWORKS[original.chainId].prover;
       const fetch = async (url) => {
-        if (!url.includes('/eth/v1/')) return new Response(proof);
-        return new Response(fs.readFileSync(path.join(dir, url.endsWith('finality_checkpoints') ? 'finality.json' : 'checkpoint-1.json')));
+        if (url === prover) return new Response(proof);
+        const response = responses[url];
+        if (!response) throw new Error('Uncaptured request: ' + url);
+        return new Response(response.body, {status: response.status});
       };
       (async () => {
         const good = await verifyCheckpoint(original.chainId, {fetch});
-        let corrupt, wrongChain;
+        let corrupt, wrongChain, stale, legacy;
         const malformed = [];
         for (const body of ['{"error":"busy"}', '<html>Maintenance</html>', 'malformed proof']) {
           try { await verifyCheckpoint(original.chainId, {fetch: async () => new Response(body)}); }
           catch(e) { malformed.push(e.code); }
         }
         const badProof = Buffer.from(proof); badProof[badProof.length - 1] ^= 1;
-        const badFetch = async (url) => !url.includes('/eth/v1/') ? new Response(badProof) : fetch(url);
+        const badFetch = async (url) => url === prover ? new Response(badProof) : fetch(url);
         try { await verifyCheckpoint(original.chainId, {fetch: badFetch}); } catch(e) { corrupt=e.code; }
-        try { await verifyCheckpoint(original.chainId === 1 ? 100 : 1, {fetch}); } catch(e) { wrongChain=e.code; }
-        console.log(JSON.stringify({good, corrupt, wrongChain, malformed}));
+        // Supply the same wrong-network proof AND metadata to the other chain's
+        // endpoints: rejection must not be caused merely by a missing fixture.
+        const proofForAnyProver = async (url, options) => {
+          if (options.method === 'POST') return new Response(proof);
+          const entry = Object.entries(responses).find(([recorded]) => new URL(recorded).pathname === new URL(url).pathname);
+          if (!entry) throw new Error('Uncaptured wrong-chain request: ' + url);
+          return new Response(entry[1].body, {status: entry[1].status});
+        };
+        try { await verifyCheckpoint(original.chainId === 1 ? 100 : 1, {fetch: proofForAnyProver}); } catch(e) { wrongChain=e.code; }
+        const legacyProof = fs.readFileSync(${JSON.stringify(legacyProofPath)});
+        try { await verifyCheckpoint(original.chainId, {fetch: async () => new Response(legacyProof)}); } catch(e) { legacy=e.code; }
+        Date.now = () => original.verifiedAt + 120000;
+        try { await verifyCheckpoint(original.chainId, {fetch}); } catch(e) { stale=e.code; }
+        console.log(JSON.stringify({good, corrupt, wrongChain, stale, legacy, malformed}));
       })().catch(e => { console.error(e); process.exitCode=1; });
     `;
       const result = JSON.parse(
@@ -587,7 +622,11 @@ describe('captured proofs with the real Colibri WASM', () => {
           .at(-1)
       );
       expect(result.good.network).toBe(network);
+      const original = JSON.parse(fs.readFileSync(path.join(dir, 'verified-checkpoint.json')));
+      expect(result.good).toMatchObject({ root: original.root, slot: original.slot, sources: original.sources });
       expect(result.corrupt).toBe('CHECKPOINT_MISMATCH');
+      expect(result.stale).toBe('CHECKPOINT_STALE');
+      expect(result.legacy).toBe('CHECKPOINT_UNAVAILABLE');
       expect(result.malformed).toEqual(Array(3).fill('CHECKPOINT_UNAVAILABLE'));
       // Wrong-network metadata may fail the quorum clock check before the proof check.
       expect(['CHECKPOINT_MISMATCH', 'CHECKPOINT_CLOCK']).toContain(result.wrongChain);
