@@ -55,6 +55,11 @@ All notable changes to Freedom will be documented in this file.
   - A remembered or this-session Block still reads as denied, and the prompt is unchanged: an undecided site is still asked about, and blocking it still denies
   - macOS builds now carry the camera and microphone entitlements and their usage descriptions, so allowing a site can reach the system prompt and Freedom appears under Privacy & Security instead of being refused before it is ever listed
 
+### Security
+
+- Updated bundled nodes:
+  - [Ant](https://github.com/freedom-hq/ant) 0.5.44 to 0.5.45 — a chain read that fails is no longer taken as a definitive "no": a transient Gnosis RPC error can no longer make the node lose sight of a postage batch you have paid for, nor make it deploy a second chequebook and strand the deposit in the first
+
 ## [0.8.5] - 2026-09-10
 
 ### Added
