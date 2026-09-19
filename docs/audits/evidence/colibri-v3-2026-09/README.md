@@ -49,6 +49,14 @@ proof hash, version and actual quorum provenance.
   were produced: these runs qualify checkpoint rebootstrap, not snapshot restore.
   All four active/unknown ownership rejection controls passed.
   [The summary](live-summary.json) records source/artifact hashes and outcomes.
+  Those `sourceSha256` digests record the tree the campaign ran on, PR #386 at
+  `9deb49d8` (2026-09-19), and are not rewritten afterwards. The review fix
+  `6a257d69` later changed two of the attested files without re-running the
+  campaign: `src/main/ens/colibri-runtime.js` (stricter client-version parse;
+  same encoded value 196608 for the pinned 3.0.0, re-derived from the WASM's
+  `_c4w_get_current_version_number()`) and this directory's `electron-main.cjs`
+  (the harness now reports failed runs on any host). Check the digests against
+  `9deb49d8`, not against `main`.
 - All 297 focused Myotis and Colibri runtime tests passed across eight suites.
 - Both production checkpoint workers verified live Ethereum and Gnosis proofs
   from an ASAR archive under Electron 44.4.1 on macOS arm64.
