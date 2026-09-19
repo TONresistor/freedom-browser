@@ -205,7 +205,29 @@ main()
     const stopped = await manager.stopAllMyotis({ shutdown: true });
     emit('final-stop', { stopped });
     success &&= stopped.every(Boolean);
-    const addon = await fs.readFile(path.join(repo, 'myotis-bin/mac-arm64/myotis-node.node'));
+    // Resolve the addon the way the product does (myotis-process.js:
+    // `<os>-<arch>`) and keep a missing/unreadable one a reported failure: a
+    // rejection in this block would skip result.json and app.exit entirely,
+    // hanging the run instead of recording its outcome.
+    const addonPath = path.join(
+      repo,
+      'myotis-bin',
+      `${{ darwin: 'mac', linux: 'linux', win32: 'win' }[process.platform]}-${process.arch}`,
+      'myotis-node.node'
+    );
+    let addonSha256 = null;
+    try {
+      addonSha256 = createHash('sha256')
+        .update(await fs.readFile(addonPath))
+        .digest('hex');
+    } catch (error) {
+      success = false;
+      emit('addon-digest-error', {
+        addonPath,
+        code: error.code || null,
+        message: error.message,
+      });
+    }
     await fs.writeFile(
       path.join(runDir, 'result.json'),
       JSON.stringify(
@@ -218,7 +240,8 @@ main()
           ).version,
           electron: process.versions.electron,
           node: process.versions.node,
-          addonSha256: createHash('sha256').update(addon).digest('hex'),
+          addon: path.relative(repo, addonPath),
+          addonSha256,
           events,
         },
         null,
