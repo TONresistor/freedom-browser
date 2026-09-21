@@ -701,10 +701,23 @@ const closeAllMenus = () => {
   hideChromeInputContextMenu();
 };
 
-// Close everything including autocomplete (used by backdrop)
+// Close everything including autocomplete and the trust popover (used by
+// backdrop). The backdrop is the neutral surface: a press on it resets every
+// transient overlay, the mirror of `onAnyMenuOpening` chaining the same two.
+//
+// The popover raises no backdrop of its own, so it can still be open under one
+// another surface raised — autocomplete is the reachable case, since its
+// `show()` closes the menus but, unlike every other raiser, not the popover.
+// Closing it here, on the backdrop's `mousedown`, is also what stops its
+// dismissal depending on the document `click` in navigation.js: a press on the
+// backdrop released inside the guest produces no `click` in this document at
+// all (the pointer moves into the `<webview>`'s own frame, so the embedder
+// never sees the `mouseup`), which left the popover stranded with no menu, no
+// dropdown and no shield highlight. #67
 const closeAllOverlays = () => {
   closeAllMenus();
   hideAutocomplete();
+  closeTrustPopover();
 };
 
 // Listen for close menus from main process (e.g., system menu clicked)

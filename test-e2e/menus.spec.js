@@ -15,6 +15,11 @@ const menuState = (window) =>
     nodes: document.getElementById('bee-menu-dropdown')?.classList.contains('open') === true,
     flyout: document.getElementById('profile-menu')?.hidden === false,
     backdrop: document.getElementById('menu-backdrop')?.classList.contains('hidden') === false,
+    // The two other surfaces the backdrop is up for (#67): the autocomplete
+    // dropdown raises it, and the trust popover can be open underneath it.
+    dropdown:
+      document.getElementById('autocomplete-dropdown')?.classList.contains('hidden') === false,
+    popover: document.getElementById('trust-popover')?.hidden === false,
     focused: document.activeElement?.id || '',
   }));
 
@@ -267,4 +272,125 @@ test('a guest taking focus does not dismiss the open chrome menus', async ({ win
     .toMatchObject({ nodes: true, backdrop: true, focused: 'bee-menu-button' });
   await window.keyboard.press('Escape');
   await expect.poll(() => menuState(window)).toMatchObject({ nodes: false, backdrop: false });
+});
+
+// The backdrop dismisses every transient overlay, not only the menus (#67).
+//
+// The trust popover is one of the two surfaces that raise no backdrop of their
+// own (`ui-consistency.md`), so it can still be open under the one
+// *autocomplete* raises: that `show()` closes the menus but, unlike every other
+// raiser, not the popover. What closes the popover is a document `click` in
+// navigation.js — and a press on the backdrop released inside the guest never
+// produces one, because the pointer moves into the `<webview>`'s own frame and
+// the embedder sees the `mousedown` without the matching `mouseup`. That left
+// the popover stranded: no menu, no dropdown, no shield highlight, and nothing
+// under the pointer to dismiss it. The backdrop is the neutral surface, so its
+// `mousedown` resets the popover too — the mirror of `onAnyMenuOpening`, which
+// has always chained the same two.
+const RESOLVED_HASH = 'c'.repeat(64);
+
+// A verified ENS name in the address bar is what grows the trust shield the
+// popover hangs off.
+const loadVerifiedName = async (window, harness) => {
+  await harness.setEnsFixture('name.eth', {
+    type: 'ok',
+    name: 'name.eth',
+    protocol: 'bzz',
+    decoded: RESOLVED_HASH,
+    uri: `bzz://${RESOLVED_HASH}`,
+    trust: { level: 'verified', queried: ['a.test', 'b.test'], agreed: ['a.test', 'b.test'] },
+  });
+  await harness.setProbeFixture(RESOLVED_HASH, { ok: true });
+  await harness.setContentFixture('bzz://name.eth/', {
+    body: '<!doctype html><title>ResolvedName</title><h1>resolved</h1>',
+  });
+
+  const input = window.locator('[data-test="address-input"]');
+  await input.click();
+  await input.fill('name.eth');
+  await input.press('Enter');
+  await expect(window.locator('#trust-shield')).toBeVisible({ timeout: 15_000 });
+};
+
+// The popover open *and* the backdrop up. Both steps are keyboard-driven on
+// purpose: a click anywhere outside the popover would dismiss it through the
+// document-`click` listener these tests are about, and ArrowDown opens the
+// autocomplete dropdown without rewriting the address bar — typing drops the
+// shield on the first keystroke, and the popover with it.
+const raiseTheBackdropOverTheTrustPopover = async (window) => {
+  await window.locator('#trust-shield').click();
+  await expect(window.locator('#trust-popover')).toBeVisible();
+  await window.keyboard.press('Control+l');
+  await window.keyboard.press('ArrowDown');
+  await expect
+    .poll(() => menuState(window))
+    .toMatchObject({ popover: true, dropdown: true, backdrop: true });
+};
+
+// One point on the backdrop near the bottom edge of the window, one over the
+// middle of the guest page.
+const backdropPoints = (window) =>
+  window.evaluate(() => {
+    const guest = document.querySelector('webview:not(.hidden)').getBoundingClientRect();
+    return {
+      press: { x: Math.round(window.innerWidth / 2), y: window.innerHeight - 60 },
+      guest: {
+        x: Math.round(guest.x + guest.width / 2),
+        y: Math.round(guest.y + guest.height / 2),
+      },
+    };
+  });
+
+const watchDocumentClicks = async (window) => {
+  await window.evaluate(() => {
+    window.__backdropClicks = [];
+    document.addEventListener('click', (event) => {
+      window.__backdropClicks.push(event.target?.id || event.target?.tagName || '?');
+    });
+  });
+  return () => window.evaluate(() => window.__backdropClicks);
+};
+
+test('a press on the backdrop released inside the page closes the trust popover', async ({
+  window,
+  harness,
+}) => {
+  await loadVerifiedName(window, harness);
+  await raiseTheBackdropOverTheTrustPopover(window);
+
+  const points = await backdropPoints(window);
+  const documentClicks = await watchDocumentClicks(window);
+
+  await window.mouse.move(points.press.x, points.press.y);
+  await window.mouse.down();
+  await window.mouse.move(points.guest.x, points.guest.y);
+  await window.mouse.up();
+
+  await expect
+    .poll(() => menuState(window))
+    .toMatchObject({ popover: false, dropdown: false, backdrop: false });
+
+  // The premise, pinned: this document saw no `click` at all, so what dismissed
+  // the popover was the backdrop's own `mousedown` and not navigation.js'
+  // document-`click` closer. Should a future Chromium start delivering a click
+  // for this gesture, this is the signal that the test has stopped covering the
+  // stranded case rather than quietly passing for the wrong reason.
+  expect(await documentClicks()).toEqual([]);
+});
+
+test('a click on the backdrop closes the dropdown and the trust popover together', async ({
+  window,
+  harness,
+}) => {
+  await loadVerifiedName(window, harness);
+  await raiseTheBackdropOverTheTrustPopover(window);
+
+  const points = await backdropPoints(window);
+  await window.mouse.click(points.press.x, points.press.y);
+
+  await expect
+    .poll(() => menuState(window))
+    .toMatchObject({ popover: false, dropdown: false, backdrop: false });
+  // The shield stays — only its popover was transient.
+  await expect(window.locator('#trust-shield')).toBeVisible();
 });
