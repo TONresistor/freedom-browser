@@ -1593,3 +1593,129 @@ test.describe('Search settings (#281)', () => {
     expect(scrolls.revealed).toBe(scrolls.centred);
   });
 });
+
+// ---------------------------------------------------------------------------
+// #280: the hash is the page's routing state *and* what the outer chrome
+// renders as `freedom://settings/<section>`, so a hash the page does not
+// honour is an address bar lying about what is on screen. It used to be
+// normalized exactly once, on first load, and an unknown chain id was
+// swallowed silently — `freedom://settings/privacy` over Appearance, or
+// `#chains/9999` over the chain list with an empty status line. The routing
+// helpers themselves are unit-tested in
+// `src/renderer/pages/settings-hash-routing.test.js`; this is the running
+// page, its chain registry and the address bar reading back from it.
+// ---------------------------------------------------------------------------
+test.describe('settings deep links name the view they open (#280)', () => {
+  const settingsPageOf = async (window, electronApp) => {
+    await openSettings(window, expect);
+    let page;
+    await expect
+      .poll(() => {
+        page = electronApp
+          .windows()
+          .find((candidate) => candidate.url().includes('/pages/settings.html'));
+        return Boolean(page);
+      })
+      .toBe(true);
+    return page;
+  };
+
+  test('a hash naming no section is rewritten to the section shown, in-session', async ({
+    window,
+    electronApp,
+  }) => {
+    const page = await settingsPageOf(window, electronApp);
+
+    // Arrive somewhere real first: the reported case is a stale bookmark or
+    // an old link opened in a Settings tab that is already up, which is the
+    // one path the first-load normalisation never saw.
+    await page.evaluate(() => {
+      location.hash = 'shortcuts';
+    });
+    await expect(page.locator('#shortcuts')).toBeVisible();
+    expect(await page.evaluate(() => location.hash)).toBe('#shortcuts');
+
+    await page.evaluate(() => {
+      location.hash = 'privacy';
+    });
+
+    await expect(page.locator('#appearance')).toBeVisible();
+    await expect.poll(() => page.evaluate(() => location.hash)).toBe('#appearance');
+    expect(
+      await page.evaluate(() => ({
+        shown: [...document.querySelectorAll('.section')]
+          .filter((section) => !section.classList.contains('hidden'))
+          .map((section) => section.id),
+        active: [...document.querySelectorAll('.nav-item.active')].map(
+          (item) => item.dataset.target
+        ),
+      }))
+    ).toEqual({ shown: ['appearance'], active: ['appearance'] });
+    // The point of the fix: the chrome reads the rewritten hash back.
+    await expect(window.locator('[data-test="address-input"]')).toHaveValue(
+      'freedom://settings/appearance'
+    );
+  });
+
+  test('every section the page ships is still reachable by its own hash', async ({
+    window,
+    electronApp,
+  }) => {
+    const page = await settingsPageOf(window, electronApp);
+    const targets = await page.evaluate(() =>
+      [...document.querySelectorAll('.nav-item')].map((item) => item.dataset.target)
+    );
+    expect(targets.length).toBe(14);
+
+    for (const target of targets) {
+      // Leave and re-enter, so each section arrives through `hashchange` —
+      // the handler the fix touched — rather than only on load.
+      await page.evaluate(() => {
+        location.hash = 'about';
+      });
+      await page.evaluate((section) => {
+        location.hash = section;
+      }, target);
+      await expect(page.locator(`#${target}`)).toBeVisible();
+      expect(await page.evaluate(() => location.hash)).toBe(`#${target}`);
+    }
+  });
+
+  test('an unknown chain deep link returns to the list, says why, and leaves real ones alone', async ({
+    window,
+    electronApp,
+  }) => {
+    const page = await settingsPageOf(window, electronApp);
+
+    // A configured chain first: the detail view renders and the deep link
+    // survives untouched, which is what must not regress.
+    await page.evaluate(() => {
+      location.hash = 'chains/1';
+    });
+    await expect(page.locator('#chains-view h2.section-title')).toHaveText('Ethereum');
+    expect(await page.evaluate(() => location.hash)).toBe('#chains/1');
+    await expect(page.locator('#chains-status')).toHaveText('');
+
+    // Now the chain that is not configured — removed here or on another
+    // device, or a typo.
+    await page.evaluate(() => {
+      location.hash = 'chains/9999';
+    });
+
+    await expect.poll(() => page.evaluate(() => location.hash)).toBe('#chains');
+    await expect(page.locator('#chains-status')).toHaveText('That chain is no longer configured.');
+    await expect(page.locator('#chains-view h2.section-title')).toHaveText('Chains');
+    await expect(window.locator('[data-test="address-input"]')).toHaveValue(
+      'freedom://settings/chains'
+    );
+
+    // The notice explains the hash that was rewritten; navigating on is not
+    // that hash any more, so it does not follow the user into a real chain.
+    await page.evaluate(() => {
+      location.hash = 'chains/1';
+    });
+    await expect(page.locator('#chains-view h2.section-title')).toHaveText('Ethereum');
+    expect(await page.evaluate(() => location.hash)).toBe('#chains/1');
+    await expect(page.locator('#chains-status')).toHaveText('');
+  });
+});
