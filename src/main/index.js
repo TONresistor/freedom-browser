@@ -581,12 +581,21 @@ app.on('window-all-closed', () => {
 });
 
 let isQuitting = false;
+// Flipped once windDown() has finished (or its watchdog gave up), so the
+// app.quit() that follows is let straight through instead of being held again.
+let shutdownSettled = false;
 
-app.on('before-quit', async (event) => {
-  if (isQuitting) return;
+// Bound on how long a re-entrant quit is held back. Holding it unconditionally
+// would let one wedged manager keep the app alive forever; this sits well above
+// the longest stop budget underneath it (Ant and Tor each SIGKILL their child
+// 5s after asking it to stop, and the IPFS dispatcher falls back to
+// terminate() after 2s). Measured wind-downs on a dev box are ~30-120ms.
+const SHUTDOWN_WATCHDOG_MS = 20_000;
 
-  event.preventDefault();
-  isQuitting = true;
+// Everything that has to happen before the process may go away. Split out of
+// the before-quit handler so the handler can bound it and still be the only
+// place that decides when quitting is allowed.
+async function windDown() {
   const myotisStopped = myotisManager.stopAllMyotis({ shutdown: true });
 
   // Close all DevTools first to prevent crashes during cleanup
@@ -639,6 +648,42 @@ app.on('before-quit', async (event) => {
   log.info(myotisExits.every(Boolean)
     ? '[App] All processes stopped, quitting...'
     : '[App] Quitting with Myotis exit unconfirmed');
+}
+
+app.on('before-quit', async (event) => {
+  if (isQuitting) {
+    // Re-entrant quit. Destroying the last window inside windDown() makes
+    // Electron fire 'window-all-closed', whose handler calls app.quit() again
+    // — and a before-quit that returns without preventDefault() lets Electron
+    // shut the process down right there, while the wind-down is still in
+    // flight. That is what took the main process out with
+    // `Error::ThrowAsJavaScriptException napi_throw` on most quits (issue
+    // #345): the IPFS dispatcher worker's env was destroyed while it sat
+    // inside a native gatewayWaitNextEvent call. It also meant no node was
+    // reliably stopped on quit — the wind-down was racing the process exit
+    // every time, and usually losing.
+    if (!shutdownSettled) event.preventDefault();
+    return;
+  }
+
+  event.preventDefault();
+  isQuitting = true;
+
+  const watchdog = setTimeout(() => {
+    log.warn('[App] Shutdown watchdog fired; quitting with the wind-down unfinished');
+    shutdownSettled = true;
+    app.quit();
+  }, SHUTDOWN_WATCHDOG_MS);
+
+  try {
+    await windDown();
+  } catch (err) {
+    // A manager that rejects must not strand the app in a half-quit state.
+    log.error('[App] Wind-down failed:', err);
+  } finally {
+    clearTimeout(watchdog);
+    shutdownSettled = true;
+  }
 
   app.quit();
 });
