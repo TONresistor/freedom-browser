@@ -57,7 +57,11 @@ import {
   refreshCache as refreshAutocompleteCache,
   hide as hideAutocomplete,
 } from './lib/autocomplete.js';
-import { initGithubBridgeUi, setOnOpenRadicleUrl } from './lib/github-bridge-ui.js';
+import {
+  initGithubBridgeUi,
+  setOnOpenRadicleUrl,
+  closeGithubBridgePanel,
+} from './lib/github-bridge-ui.js';
 import { initDownloadsUi, setOnOpenDownloadsPage } from './lib/downloads-ui.js';
 import { initMenuBackdrop } from './lib/menu-backdrop.js';
 import { initLinkStatus } from './lib/link-status.js';
@@ -156,14 +160,15 @@ setOnOpenDownloadsPage(openDownloadsPage);
 setOnNewTab(() => createTab());
 setOnOpenRadicleUrl((url) => loadTarget(url));
 // When any popover/menu opens, dismiss other transient surfaces so we
-// don't end up with the autocomplete dropdown or either of the address bar's
-// two popovers -- the ENS trust popover and the permission indicator's, the
-// surfaces that raise no backdrop of their own -- stacked on top of the
+// don't end up with the autocomplete dropdown or any of the address bar's
+// three no-backdrop surfaces -- the ENS trust popover, the permission
+// indicator's popover and the GitHub-bridge panel -- stacked on top of the
 // nodes/main menu.
 const onAnyMenuOpening = () => {
   hideAutocomplete();
   closeTrustPopover();
   closePermissionPopover();
+  closeGithubBridgePanel();
 };
 setOnMenuOpening(onAnyMenuOpening);
 setOnTabContextMenuOpening(onAnyMenuOpening);
@@ -704,26 +709,29 @@ const closeAllMenus = () => {
   hideChromeInputContextMenu();
 };
 
-// Close everything including autocomplete and the address bar's two popovers
-// (used by backdrop). The backdrop is the neutral surface: a press on it resets
-// every transient overlay, the mirror of `onAnyMenuOpening` chaining the same
-// set.
+// Close everything including autocomplete and the address bar's three
+// no-backdrop surfaces (used by backdrop). The backdrop is the neutral surface:
+// a press on it resets every transient overlay, the mirror of
+// `onAnyMenuOpening` chaining the same set.
 //
-// Neither popover raises a backdrop of its own, so either can still be open
-// under one another surface raised — autocomplete is the reachable case, since
-// its `show()` closes the menus but, unlike every other raiser, neither
-// popover. Closing them here, on the backdrop's `mousedown`, is also what stops
-// their dismissal depending on the document `click` listeners (navigation.js
-// for the trust popover, site-permissions-ui.js for the permission one): a
-// press on the backdrop released inside the guest produces no `click` in this
-// document at all (the pointer moves into the `<webview>`'s own frame, so the
-// embedder never sees the `mouseup`), which left a popover stranded with no
-// menu, no dropdown and no highlight on the control it hangs off. #67
+// None of the three -- the trust popover, the permission indicator's popover
+// and the GitHub-bridge panel -- raises a backdrop of its own, so any of them
+// can still be open under one another surface raised. Autocomplete is the
+// reachable case, since its `show()` closes the menus but, unlike every other
+// raiser, none of these. Closing them here, on the backdrop's `mousedown`, is
+// also what stops their dismissal depending on the document `click` listeners
+// (navigation.js for the trust popover, site-permissions-ui.js for the
+// permission one, github-bridge-ui.js for the panel): a press on the backdrop
+// released inside the guest produces no `click` in this document at all (the
+// pointer moves into the `<webview>`'s own frame, so the embedder never sees
+// the `mouseup`), which left the surface stranded with no menu, no dropdown and
+// no highlight on the control it hangs off. #67
 const closeAllOverlays = () => {
   closeAllMenus();
   hideAutocomplete();
   closeTrustPopover();
   closePermissionPopover();
+  closeGithubBridgePanel();
 };
 
 // Listen for close menus from main process (e.g., system menu clicked)

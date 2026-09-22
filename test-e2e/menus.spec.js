@@ -25,13 +25,16 @@ const menuState = (window) =>
     flyout: document.getElementById('profile-menu')?.hidden === false,
     backdrop: document.getElementById('menu-backdrop')?.classList.contains('hidden') === false,
     // The other surfaces the backdrop is up for (#67): the autocomplete
-    // dropdown raises it, and either address-bar popover — the trust shield's
-    // or the permission indicator's — can be open underneath it.
+    // dropdown raises it, and any of the three address-bar surfaces that raise
+    // none of their own — the trust shield's popover, the permission
+    // indicator's, or the GitHub-bridge panel — can be open underneath it.
     dropdown:
       document.getElementById('autocomplete-dropdown')?.classList.contains('hidden') === false,
     popover: document.getElementById('trust-popover')?.hidden === false,
     permPopover: document.getElementById('permission-popover')?.hidden === false,
     permExpanded: document.getElementById('permission-indicator')?.getAttribute('aria-expanded'),
+    bridgePanel:
+      document.getElementById('github-bridge-panel')?.classList.contains('hidden') === false,
     focused: document.activeElement?.id || '',
   }));
 
@@ -390,6 +393,14 @@ test('a press on the backdrop released inside the page closes the trust popover'
   expect(await documentClicks()).toEqual([]);
 });
 
+// Regression coverage for the reset itself, not a mutation guard. An ordinary
+// click on the backdrop *sometimes* still produces a document `click`: if
+// Chromium has not re-routed hit-testing into the guest by the time the
+// `mouseup` arrives, the embedder sees it on the `<webview>` host and
+// dispatches the click to the common ancestor `<body>`, where the surface's own
+// click-away closer runs with no help from `closeAllOverlays`. The drag-off
+// tests above are what pin the fix -- the pointer move gives the routing time
+// to settle, so no click is ever dispatched and `toEqual([])` says so.
 test('a click on the backdrop closes the dropdown and the trust popover together', async ({
   window,
   harness,
@@ -461,6 +472,14 @@ test('a press on the backdrop released inside the page closes the permission pop
   expect(await documentClicks()).toEqual([]);
 });
 
+// Regression coverage for the reset itself, not a mutation guard. An ordinary
+// click on the backdrop *sometimes* still produces a document `click`: if
+// Chromium has not re-routed hit-testing into the guest by the time the
+// `mouseup` arrives, the embedder sees it on the `<webview>` host and
+// dispatches the click to the common ancestor `<body>`, where the surface's own
+// click-away closer runs with no help from `closeAllOverlays`. The drag-off
+// tests above are what pin the fix -- the pointer move gives the routing time
+// to settle, so no click is ever dispatched and `toEqual([])` says so.
 test('a click on the backdrop closes the dropdown and the permission popover together', async ({
   window,
   harness,
@@ -503,5 +522,86 @@ test('right-clicking a tab to open its menu closes the permission popover', asyn
   await expect
     .poll(() => menuState(window))
     .toMatchObject({ permPopover: false, permExpanded: 'false' });
+  expect(await documentClicks()).toEqual([]);
+});
+
+// The GitHub-bridge "Seed to Radicle" panel is the third address-bar surface
+// that raises no backdrop of its own. It is closed by its own document `click`
+// listener and Escape — it has no blur closer at all — so the same
+// press-on-the-backdrop-release-in-the-guest gesture stranded it over the page
+// with no dropdown, no backdrop and nothing under the pointer to dismiss it.
+// `closeAllOverlays` closes all three.
+
+// A GitHub repo page in the address bar is what grows the bridge button the
+// panel hangs off.
+const loadGithubRepoPage = async (window, harness) => {
+  const url = 'https://github.com/octocat/hello-world';
+  await harness.setContentFixture(url, {
+    body: '<!doctype html><title>hello-world</title><h1>repo</h1>',
+  });
+
+  const input = window.locator('[data-test="address-input"]');
+  await input.click();
+  await input.fill(url);
+  await input.press('Enter');
+  await expect(window.locator('#github-bridge-btn')).toBeVisible({ timeout: 15_000 });
+};
+
+// The panel open *and* the backdrop up — keyboard-driven past the button click
+// for the same reason as both popovers above: any click outside the panel goes
+// through the very document-`click` listener these tests are about.
+const raiseTheBackdropOverTheBridgePanel = async (window) => {
+  await window.locator('#github-bridge-btn').click();
+  await expect(window.locator('#github-bridge-panel')).toBeVisible();
+  await window.keyboard.press('Control+l');
+  await window.keyboard.press('ArrowDown');
+  await expect
+    .poll(() => menuState(window))
+    .toMatchObject({ bridgePanel: true, dropdown: true, backdrop: true });
+};
+
+test('a press on the backdrop released inside the page closes the GitHub-bridge panel', async ({
+  window,
+  harness,
+}) => {
+  await loadGithubRepoPage(window, harness);
+  await raiseTheBackdropOverTheBridgePanel(window);
+
+  const points = await backdropPoints(window);
+  const documentClicks = await watchDocumentClicks(window);
+
+  await window.mouse.move(points.press.x, points.press.y);
+  await window.mouse.down();
+  await window.mouse.move(points.guest.x, points.guest.y);
+  await window.mouse.up();
+
+  await expect
+    .poll(() => menuState(window))
+    .toMatchObject({ bridgePanel: false, dropdown: false, backdrop: false });
+
+  // Same premise as both popovers' cases: no `click` reached this document, so
+  // what closed the panel was the backdrop's own `mousedown`.
+  expect(await documentClicks()).toEqual([]);
+  // The button stays — only its panel was transient.
+  await expect(window.locator('#github-bridge-btn')).toBeVisible();
+});
+
+// The `onAnyMenuOpening` half, driven from the tab context menu for the same
+// reason as the permission popover's version above: a right-click dispatches
+// `contextmenu` and no `click`, so the raiser's own chain is the only thing
+// that can close the panel here.
+test('right-clicking a tab to open its menu closes the GitHub-bridge panel', async ({
+  window,
+  harness,
+}) => {
+  await loadGithubRepoPage(window, harness);
+  await window.locator('#github-bridge-btn').click();
+  await expect(window.locator('#github-bridge-panel')).toBeVisible();
+
+  const documentClicks = await watchDocumentClicks(window);
+  await window.locator('[data-test="tab"]').first().click({ button: 'right' });
+
+  await expect(window.locator('#tab-context-menu')).toBeVisible();
+  await expect.poll(() => menuState(window)).toMatchObject({ bridgePanel: false });
   expect(await documentClicks()).toEqual([]);
 });
