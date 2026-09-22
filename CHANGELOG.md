@@ -54,6 +54,14 @@ All notable changes to Freedom will be documented in this file.
   - `navigator.permissions.query()` and `Notification.permission` no longer report "denied" for a site you have never been asked about, so those sites go on to ask and Freedom's own prompt appears instead of their "access is blocked" screen
   - A remembered or this-session Block still reads as denied, and the prompt is unchanged: an undecided site is still asked about, and blocking it still denies
   - macOS builds now carry the camera and microphone entitlements and their usage descriptions, so allowing a site can reach the system prompt and Freedom appears under Privacy & Security instead of being refused before it is ever listed
+- A Settings address that names a section Freedom does not have no longer stands over a different one
+  - `freedom://settings/privacy` — a stale bookmark, a typo, a link from an older build — opened Appearance and left its own name in the address bar, so bookmarking, sharing or reloading it went on promising a section that has never existed. The address is now put back on the section actually on screen, the way `chrome://settings/nonsense` is
+  - Only the very first arrival at the page was ever corrected, so the case that mattered — a link followed into a Settings tab that is already open — was the one that kept its address
+  - A section's own address is untouched, and so is a sub-route such as a single chain's page
+- A Settings link to a single chain opens that chain, and one that is no longer configured says so
+  - `freedom://settings/chains/1` is the address Freedom shows while you are on a chain's own page, but typing it back — or opening the bookmark it makes — navigated nowhere, leaving that address standing over the chain list. A link to a section's sub-page now goes where it says
+  - A chain that is no longer configured, removed here or on another device, rendered the whole chain list beneath an address still claiming that one chain, with a blank status line. It now puts the address back on the chain list and says "That chain is no longer configured."
+  - A chain added in another window is not mistaken for a removed one: the notice is only drawn once the chain list has been re-read from the app, and it is cleared as soon as you navigate on
 
 ### Security
 

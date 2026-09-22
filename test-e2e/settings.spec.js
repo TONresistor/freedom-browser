@@ -1718,4 +1718,46 @@ test.describe('settings deep links name the view they open (#280)', () => {
     expect(await page.evaluate(() => location.hash)).toBe('#chains/1');
     await expect(page.locator('#chains-status')).toHaveText('');
   });
+
+  // The other half of the same promise: a deep link only *is* one if it can
+  // arrive through the chrome. The address bar shows a chain detail as
+  // `freedom://settings/chains/1`, so typing that back — or opening the
+  // bookmark it makes — has to land there. `page-urls.js`'s parse accepted a
+  // single sub-path segment, so it landed nowhere: the webview stayed on the
+  // chain list while the bar kept standing over it, the same shape #280 is
+  // about, on a chain that exists.
+  test('a chain detail the address bar shows can be typed back into it', async ({
+    window,
+    electronApp,
+  }) => {
+    const page = await settingsPageOf(window, electronApp);
+    const input = window.locator('[data-test="address-input"]');
+
+    // Settings already open on the chain list — the in-session case.
+    await page.evaluate(() => {
+      location.hash = 'chains';
+    });
+    await expect(page.locator('#chains-view h2.section-title')).toHaveText('Chains');
+    await expect(input).toHaveValue('freedom://settings/chains');
+
+    // The chrome's own chain-detail URL, committed through the address bar.
+    await input.click();
+    await input.fill('freedom://settings/chains/1');
+    await input.press('Enter');
+
+    await expect(page.locator('#chains-view h2.section-title')).toHaveText('Ethereum');
+    await expect.poll(() => page.evaluate(() => location.hash)).toBe('#chains/1');
+    await expect(input).toHaveValue('freedom://settings/chains/1');
+
+    // And a chain that is not configured, which is what makes the rewrite
+    // above reachable from a bookmark at all: it routes, then settles back on
+    // the list with the notice.
+    await input.click();
+    await input.fill('freedom://settings/chains/9999');
+    await input.press('Enter');
+
+    await expect.poll(() => page.evaluate(() => location.hash)).toBe('#chains');
+    await expect(page.locator('#chains-status')).toHaveText('That chain is no longer configured.');
+    await expect(input).toHaveValue('freedom://settings/chains');
+  });
 });
