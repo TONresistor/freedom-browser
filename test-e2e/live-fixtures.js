@@ -195,10 +195,18 @@ function watchProcessExit(electronApp, { timeout = 60_000 } = {}) {
   });
 
   return async function expectCleanExit() {
-    const result = await Promise.race([
-      exited,
-      new Promise((resolve) => setTimeout(() => resolve({ code: 'timed out' }), timeout)),
-    ]);
+    let timer = null;
+    const timedOut = new Promise((resolve) => {
+      timer = setTimeout(() => resolve({ code: 'timed out' }), timeout);
+    });
+    let result;
+    try {
+      result = await Promise.race([exited, timedOut]);
+    } finally {
+      // The exit normally wins in milliseconds; don't leave the loser running
+      // in the Playwright worker every live/packaged-live spec imports this in.
+      clearTimeout(timer);
+    }
 
     expect(stderr, 'the app printed a fatal error while quitting').not.toContain('FATAL ERROR');
     expect(result).toEqual({ code: 0, signal: null });

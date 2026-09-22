@@ -371,7 +371,7 @@ describe('FreedomIpfsNativeNode', () => {
     expect(node.nodeHandle).toBe('0');
   });
 
-  test('stop() resolves on the acknowledgement alone when the exit event lags', async () => {
+  test('stop() resolves on the acknowledgement without waiting out the terminate budget', async () => {
     jest.useFakeTimers();
     const binding = createBindingMock();
     const { FreedomIpfsNativeNode, DISPATCHER_EXIT_GRACE_MS } = loadModule(binding);
@@ -382,10 +382,37 @@ describe('FreedomIpfsNativeNode', () => {
     await Promise.resolve();
     worker.emit('message', { type: 'stopped' });
 
-    jest.advanceTimersByTime(DISPATCHER_EXIT_GRACE_MS);
+    // Exit lands inside the grace: nothing to terminate, and the stop settles
+    // far short of DISPATCHER_STOP_TIMEOUT_MS.
+    jest.advanceTimersByTime(DISPATCHER_EXIT_GRACE_MS - 1);
+    worker.emit('exit', 0);
     await stopped;
 
     expect(worker.terminate).not.toHaveBeenCalled();
+    expect(binding.nodeFree).toHaveBeenCalledWith('1');
+  });
+
+  test('stop() terminates an acknowledged dispatcher that never exits', async () => {
+    jest.useFakeTimers();
+    const binding = createBindingMock();
+    const { FreedomIpfsNativeNode, DISPATCHER_EXIT_GRACE_MS } = loadModule(binding);
+    const log = require('../logger');
+    const node = createDispatcherNode(FreedomIpfsNativeNode);
+    const worker = node.dispatcher;
+
+    const stopped = node.stop();
+    await Promise.resolve();
+    worker.emit('message', { type: 'stopped' });
+
+    // The thread acknowledged but is still ref'ing its loop. Resolving on the
+    // grace alone would drop the `exit` listener and leak it silently.
+    jest.advanceTimersByTime(DISPATCHER_EXIT_GRACE_MS);
+    await stopped;
+
+    expect(worker.terminate).toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      '[IPFS] native dispatcher acknowledged stop but did not exit; terminating'
+    );
     expect(binding.nodeFree).toHaveBeenCalledWith('1');
   });
 

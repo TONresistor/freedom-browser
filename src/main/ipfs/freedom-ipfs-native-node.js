@@ -392,9 +392,16 @@ class FreedomIpfsNativeNode {
         if (message?.type !== 'stopped') return;
         // Acknowledged: no native call can be in flight any more. The thread
         // exit that follows is a formality, so give it a short grace instead
-        // of holding the quit open for the full terminate budget.
+        // of holding the quit open for the full terminate budget. If it does
+        // not exit within the grace, terminate it: the acknowledgement is
+        // exactly the point where that is safe (no gatewayWaitNextEvent in
+        // flight), and resolving without it would drop the one `exit` listener
+        // that could have reported the thread, leaking it silently per stop.
         clearTimeout(terminateTimer);
-        exitTimer = setTimeout(finish, DISPATCHER_EXIT_GRACE_MS);
+        exitTimer = setTimeout(() => {
+          log.warn('[IPFS] native dispatcher acknowledged stop but did not exit; terminating');
+          dispatcher.terminate().finally(finish);
+        }, DISPATCHER_EXIT_GRACE_MS);
         exitTimer.unref?.();
       };
 
