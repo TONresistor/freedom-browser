@@ -54,6 +54,8 @@ All notable changes to Freedom will be documented in this file.
   - `navigator.permissions.query()` and `Notification.permission` no longer report "denied" for a site you have never been asked about, so those sites go on to ask and Freedom's own prompt appears instead of their "access is blocked" screen
   - A remembered or this-session Block still reads as denied, and the prompt is unchanged: an undecided site is still asked about, and blocking it still denies
   - macOS builds now carry the camera and microphone entitlements and their usage descriptions, so allowing a site can reach the system prompt and Freedom appears under Privacy & Security instead of being refused before it is ever listed
+- A Swarm or IPFS folder address typed without its trailing slash opens the folder
+  - It used to land on a "not found" page, with the site's content hash in the address bar in place of its name
 
 ### Security
 
