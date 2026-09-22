@@ -1722,10 +1722,13 @@ test.describe('settings deep links name the view they open (#280)', () => {
   // The other half of the same promise: a deep link only *is* one if it can
   // arrive through the chrome. The address bar shows a chain detail as
   // `freedom://settings/chains/1`, so typing that back — or opening the
-  // bookmark it makes — has to land there. `page-urls.js`'s parse accepted a
-  // single sub-path segment, so it landed nowhere: the webview stayed on the
-  // chain list while the bar kept standing over it, the same shape #280 is
-  // about, on a chain that exists.
+  // bookmark it makes — has to land there. The two parsers that read a
+  // `freedom://` address back in — `navigation.js`'s `FREEDOM_PAGE_PATTERN`
+  // and its sibling `tabs.js#freedomInternalPageTarget` — accepted a single
+  // sub-path segment, so it landed nowhere: the webview stayed on the chain
+  // list while the bar kept standing over it, the same shape #280 is about,
+  // on a chain that exists. (`page-urls.js#getInternalPageName` is the
+  // emitter of that address and was never depth-limited.)
   test('a chain detail the address bar shows can be typed back into it', async ({
     window,
     electronApp,
