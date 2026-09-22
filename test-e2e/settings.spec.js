@@ -1696,8 +1696,8 @@ test.describe('settings deep links name the view they open (#280)', () => {
     expect(await page.evaluate(() => location.hash)).toBe('#chains/1');
     await expect(page.locator('#chains-status')).toHaveText('');
 
-    // Now the chain that is not configured — removed here or on another
-    // device, or a typo.
+    // Now the chain that is not configured — removed here or in another
+    // window, or a typo.
     await page.evaluate(() => {
       location.hash = 'chains/9999';
     });
@@ -1709,8 +1709,27 @@ test.describe('settings deep links name the view they open (#280)', () => {
       'freedom://settings/chains'
     );
 
+    // The add-chain form opens on the same `#chains` hash, so no
+    // `hashchange` fires for it: the notice has to be cleared by the render
+    // that replaces the view, or it sits under "Add a chain" describing a
+    // list that is no longer on screen.
+    await page.locator('#chains-view [data-action="add-chain"]').click();
+    await expect(page.locator('#chains-view h2.section-title')).toHaveText('Add a chain');
+    await expect(page.locator('#chains-status')).toHaveText('');
+
+    // Back to the list — also on the same hash — and the notice stays gone.
+    await page.locator('#chains-view [data-action="cancel-add"]').click();
+    await expect(page.locator('#chains-view h2.section-title')).toHaveText('Chains');
+    await expect(page.locator('#chains-status')).toHaveText('');
+
     // The notice explains the hash that was rewritten; navigating on is not
     // that hash any more, so it does not follow the user into a real chain.
+    await page.evaluate(() => {
+      location.hash = 'chains/9999';
+    });
+    await expect
+      .poll(() => page.evaluate(() => document.getElementById('chains-status').textContent))
+      .toBe('That chain is no longer configured.');
     await page.evaluate(() => {
       location.hash = 'chains/1';
     });

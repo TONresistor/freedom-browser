@@ -4022,11 +4022,21 @@
             ${isCustom ? cardButton('Remove this chain', 'remove-chain', 'danger') : ''}`;
         };
 
+        // The notice answers one hash and one view: the chain list standing
+        // in for a chain the registry does not have. Every re-render is a
+        // chance for that view to be replaced, so clearing it belongs here
+        // rather than only on `hashchange` — the add-chain form opens on the
+        // same hash, so no `hashchange` fires for it.
+        const clearChainGoneStatus = () => {
+          if (statusEl && statusEl.textContent === CHAIN_GONE_STATUS) setStatus('');
+        };
+
         // `fresh` marks a render driven by a config just read from the
         // registry. Only such a render may conclude that a chain named in the
         // hash is gone: a hash change re-renders off the cached config first,
         // and that copy can simply predate a chain added in another window.
         const render = ({ fresh = false } = {}) => {
+          clearChainGoneStatus(); // the branch below re-raises it if it still holds
           if (addState) {
             renderAdd();
             return;
@@ -4475,9 +4485,8 @@
           clearTimeout(searchTimer);
           endpointForm = null;
           addState = null;
-          // The "no longer configured" notice explains one hash; the user has
-          // navigated past it, so it is not the answer to this view any more.
-          if (statusEl && statusEl.textContent === CHAIN_GONE_STATUS) setStatus('');
+          // The "no longer configured" notice is cleared by `render()` below:
+          // the user has navigated past the hash it explains.
           render(); // instant list<->detail swap from cached config
           if (entering) reload(); // then re-sync in case it changed elsewhere
         });
