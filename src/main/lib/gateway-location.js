@@ -9,6 +9,36 @@
  * way — hence one helper rather than a copy per transport.
  */
 
+// Whether two path segments name the same thing, comparing what they *mean*
+// rather than how they are spelled. The two sides are escaped by different
+// parsers and their escape sets do not agree: Chromium (WHATWG, so also the
+// `URL` parsing below) leaves `!'()*[]|^` literal in a path, while Go's
+// `url.URL.EscapedPath()` — which Bee falls back to as soon as `pkg/api/bzz.go`
+// mutates `u.Path` to append the canonical slash, invalidating its `RawPath` —
+// percent-escapes every one of them. So `GET /bzz/<ref>/photos(2024)/blog`
+// really is answered `308 Location: /bzz/<ref>/photos%282024%29/blog/`
+// (reproduced against go1.26.5 `net/url` + `net/http.Redirect` on 2026-09-22), and
+// a raw-bytes prefix test reads the redirect as leaving the request's directory
+// and passes it through — straight back to the doubled path and leaked hash this
+// helper exists to prevent. Decoding per segment (never across the whole path,
+// so an encoded `/` inside a name can never be mistaken for a separator) makes
+// the comparison agree with both parsers.
+function sameSegment(a, b) {
+  if (a === b) return true;
+  const decodedA = decodeSegment(a);
+  return decodedA !== null && decodedA === decodeSegment(b);
+}
+
+function decodeSegment(segment) {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    // A malformed escape (`%zz`) decodes to nothing meaningful; only an exact
+    // byte match above can carry such a segment.
+    return null;
+  }
+}
+
 // A gateway redirect is written in the gateway's own URL space, but Chromium
 // resolves it against the `ipfs://` / `ipns://` / `bzz://` request URL — it
 // never saw the gateway origin. The canonical directory redirect is the
@@ -57,12 +87,28 @@ function rewriteGatewayLocation(location, requestUrl) {
   }
   if (target.origin !== requested.origin) return null;
 
-  // Everything up to and including the last `/` of the request path — the
-  // directory a relative reference is resolved against on both sides.
-  const dir = requested.pathname.slice(0, requested.pathname.lastIndexOf('/') + 1);
-  if (!dir || !target.pathname.startsWith(dir)) return null;
+  // The request's directory — everything before the last `/` of its path — as
+  // segments, since that is the granularity the escaping differs at. A path
+  // with no `/` at all has no directory to resolve a relative reference
+  // against.
+  if (!requested.pathname.includes('/')) return null;
+  const dirSegments = requested.pathname.split('/').slice(0, -1);
+  const targetSegments = target.pathname.split('/');
+  // Strictly *more* segments than the directory, exactly as the byte-prefix
+  // test this replaced required (its `dir` ended in `/`, so the target had to
+  // carry something after it). An equal-length target is the directory with
+  // its trailing slash stripped, which `./` would not express — `./` resolves
+  // *with* the slash, turning a slash-stripping redirect into a loop — and
+  // this also keeps the comparison below from reading past the end of a
+  // shorter target, where `decodeURIComponent(undefined)` is the string
+  // `'undefined'` and would match a directory literally named that.
+  if (targetSegments.length <= dirSegments.length) return null;
+  if (!dirSegments.every((segment, i) => sameSegment(segment, targetSegments[i]))) return null;
 
-  const relative = target.pathname.slice(dir.length);
+  // Spelled as the gateway wrote it: a percent-escape it added is equivalent to
+  // the literal character for both parsers, so re-expressing it would gain
+  // nothing and risks disagreeing with the bytes the gateway will be asked for.
+  const relative = targetSegments.slice(dirSegments.length).join('/');
   // Always `./`-prefixed, never bare. A bare relative reference whose first
   // segment contains a `:` is parsed as an absolute URL with that segment as
   // its *scheme* (RFC 3986 §4.2 / the WHATWG URL parser), and `:` is a legal

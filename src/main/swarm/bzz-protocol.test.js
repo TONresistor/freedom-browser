@@ -799,6 +799,30 @@ describe('handleBzzRequest redirect canonicalisation', () => {
     });
   });
 
+  // Go escapes `!'()*[]|^` in a path where Chromium leaves them literal, and
+  // Bee's canonicalisation re-escapes through `EscapedPath()` because appending
+  // the slash invalidates the request's `RawPath`. So the `Location` for a
+  // directory under such a parent is spelled differently from the gateway path
+  // the handler asked for (verified against go1.26.5's own `net/url` +
+  // `net/http.Redirect`), and a raw-bytes prefix test reads it as leaving the
+  // request's directory and passes it through — back to the doubled path and
+  // leaked hash for exactly these names.
+  test('rewrites a redirect whose parent segment Bee re-escaped', async () => {
+    ensResolvesTo(HASH);
+
+    await expect(
+      redirectCase('bzz://meinhard.eth/photos(2024)/blog', {
+        status: 308,
+        location: `/bzz/${HASH}/photos%282024%29/blog/`,
+      })
+    ).resolves.toEqual({
+      status: 308,
+      location: './blog/',
+      committed: 'bzz://meinhard.eth/photos(2024)/blog/',
+      gatewayUrl: `http://127.0.0.1:1633/bzz/${HASH}/photos(2024)/blog`,
+    });
+  });
+
   test('keeps the query string on the rewritten Location', async () => {
     ensResolvesTo(HASH);
 

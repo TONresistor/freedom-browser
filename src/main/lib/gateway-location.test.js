@@ -66,6 +66,69 @@ describe('rewriteGatewayLocation', () => {
     );
   });
 
+  // Go escapes `!'()*[]|^` in a path; Chromium leaves every one of them
+  // literal. So Bee's `Location` for a directory under a parent whose name
+  // carries any of them is spelled differently from the request path it
+  // extends, and a raw-bytes prefix test reads it as leaving the directory.
+  // Verified against go1.26.5's own `net/url` + `net/http.Redirect`.
+  test.each([
+    ['photos(2024)', 'photos%282024%29'],
+    ["it's", 'it%27s'],
+    ['a[1]', 'a%5B1%5D'],
+  ])('rewrites a redirect whose parent segment the gateway re-escaped (%s)', (literal, escaped) => {
+    expect(
+      rewriteGatewayLocation(
+        `/bzz/${REF}/${escaped}/blog/`,
+        `http://127.0.0.1:1633/bzz/${REF}/${literal}/blog`
+      )
+    ).toBe('./blog/');
+  });
+
+  // The same disagreement in the other direction: the request carried the
+  // escape and the gateway's re-escape is byte-identical to it, so this one
+  // already worked — pinned so the comparison stays symmetric.
+  test('rewrites a redirect under a parent segment the request escaped', () => {
+    expect(
+      rewriteGatewayLocation(
+        `/bzz/${REF}/photos%282024%29/blog/`,
+        `http://127.0.0.1:1633/bzz/${REF}/photos%282024%29/blog`
+      )
+    ).toBe('./blog/');
+  });
+
+  // Decoding is per segment, never across the whole path: a name containing an
+  // encoded `/` is one directory, so a target that splits it into two real
+  // segments sits outside the request's directory and must still be declined.
+  test('declines when an encoded slash would have to pass for a separator', () => {
+    expect(
+      rewriteGatewayLocation(
+        `/bzz/${REF}/a/b/page`,
+        `http://127.0.0.1:1633/bzz/${REF}/a%2Fb/index.html`
+      )
+    ).toBeNull();
+  });
+
+  // A climb-out has fewer segments than the request's directory, so the
+  // comparison would otherwise read a missing segment — and
+  // `decodeURIComponent(undefined)` is the string `'undefined'`, which a
+  // directory of that name (JS-generated sites produce them) would match,
+  // turning a climb-out into `./`.
+  test('declines a climb-out past a directory literally named `undefined`', () => {
+    expect(
+      rewriteGatewayLocation(`/bzz/${REF}/a`, `http://127.0.0.1:1633/bzz/${REF}/a/undefined/x`)
+    ).toBeNull();
+  });
+
+  // The directory itself, minus its trailing slash: `./` resolves *with* the
+  // slash, so rewriting this would answer a slash-stripping redirect with the
+  // URL it just redirected away from. Declined, exactly as the byte-prefix
+  // test this replaced declined it.
+  test('declines a target that is the request directory without its slash', () => {
+    expect(
+      rewriteGatewayLocation(`/bzz/${REF}/blog`, `http://127.0.0.1:1633/bzz/${REF}/blog/`)
+    ).toBeNull();
+  });
+
   test('declines a target that climbs out of the request directory', () => {
     expect(
       rewriteGatewayLocation(
