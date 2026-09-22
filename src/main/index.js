@@ -647,11 +647,35 @@ async function windDown() {
   cleanupTempDirs();
 
   log.info('[App] Waiting for Ant, IPFS, Myotis, Radicle, and Tor to stop...');
-  const [myotisExits] = await Promise.all([myotisStopped, stopAnt(), stopIpfs(), stopRadicle(), stopTor()]);
-  if (myotisExits.some((exited) => !exited)) {
+  // allSettled, not all: Promise.all settles on the *first* rejection, so one
+  // manager throwing would release the quit while the other legs are still in
+  // flight — notably stopIpfs(), whose dispatcher ack is the very window this
+  // wind-down exists to hold open (issue #345). Every leg has to finish, and
+  // a rejecting one is logged rather than abandoning the others. The
+  // SHUTDOWN_WATCHDOG_MS timer above still bounds the total wait, so waiting
+  // for more legs can't wedge the quit.
+  const LEGS = [
+    ['Myotis', () => myotisStopped],
+    ['Ant', stopAnt],
+    ['IPFS', stopIpfs],
+    ['Radicle', stopRadicle],
+    ['Tor', stopTor],
+  ];
+  // The async wrapper keeps a *synchronous* throw from a stop function inside
+  // the join too: thrown straight into Promise.allSettled's argument array it
+  // would escape past every sibling leg, the same short-circuit one step
+  // earlier. Each leg still starts in this tick, as before.
+  const settled = await Promise.allSettled(LEGS.map(async ([, start]) => start()));
+  settled.forEach((result, i) => {
+    if (result.status === 'rejected') log.error(`[App] ${LEGS[i][0]} stop failed:`, result.reason);
+  });
+  // A rejected Myotis leg proves nothing about its children, so treat it the
+  // same as an unconfirmed exit rather than as a clean stop.
+  const myotisExits = settled[0].status === 'fulfilled' ? settled[0].value : null;
+  if (!myotisExits || myotisExits.some((exited) => !exited)) {
     log.warn('[App] Myotis child exit unconfirmed; data-directory reuse remains blocked');
   }
-  log.info(myotisExits.every(Boolean)
+  log.info(myotisExits && myotisExits.every(Boolean)
     ? '[App] All processes stopped, quitting...'
     : '[App] Quitting with Myotis exit unconfirmed');
 }
