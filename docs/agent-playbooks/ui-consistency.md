@@ -145,7 +145,12 @@ third, and it dismisses on focus loss not at all, only on a document `click` and
 Escape. All three are reset from the *backdrop* another surface raises, through
 `closeAllOverlays`/`onAnyMenuOpening` in `index.js`, because a press on that
 backdrop released inside the guest dispatches no `click` in this document and
-would otherwise strand them (#67). This is a
+would otherwise strand them (#67). `onAnyMenuOpening` is chained by every
+backdrop-raising *menu*, the page context menu included — it is raised from
+inside the guest rather than from the chrome, which is how it was missed — so
+the autocomplete dropdown is the one raiser that deliberately does not chain
+it: it is the address bar's own surface and sits alongside the three rather
+than over them. This is a
 claim about every surface, so it is checked as one: `window-deactivation.test.js`
 sweeps `lib/` for the modules that call `showMenuBackdrop()` and fails any that
 does not also register `onWindowDeactivated` — six today, including both

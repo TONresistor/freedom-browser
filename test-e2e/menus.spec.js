@@ -605,3 +605,37 @@ test('right-clicking a tab to open its menu closes the GitHub-bridge panel', asy
   await expect.poll(() => menuState(window)).toMatchObject({ bridgePanel: false });
   expect(await documentClicks()).toEqual([]);
 });
+
+// The page context menu is the one menu raised from *inside* the guest, and it
+// was the one raiser not on the `onAnyMenuOpening` chain — so right-clicking the
+// page left all three no-backdrop surfaces stacked beside it, the panel worst of
+// all since it has no blur closer to fall back on. Driven with a synthetic
+// `contextmenu` in the guest (the preload forwards the context to the shell),
+// which dispatches no `click` in this document, so the raiser's own chain is
+// again the only thing that can close the panel.
+const openPageContextMenuInGuest = (window) =>
+  window.evaluate(async () => {
+    const webview = document.querySelector('webview:not(.hidden)');
+    await webview.executeJavaScript(`(() => {
+      document.body.dispatchEvent(new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true, clientX: 40, clientY: 40,
+      }));
+      return true;
+    })()`);
+  });
+
+test('right-clicking the page to open its menu closes the GitHub-bridge panel', async ({
+  window,
+  harness,
+}) => {
+  await loadGithubRepoPage(window, harness);
+  await window.locator('#github-bridge-btn').click();
+  await expect(window.locator('#github-bridge-panel')).toBeVisible();
+
+  const documentClicks = await watchDocumentClicks(window);
+  await openPageContextMenuInGuest(window);
+
+  await expect(window.locator('#page-context-menu')).toBeVisible();
+  await expect.poll(() => menuState(window)).toMatchObject({ bridgePanel: false });
+  expect(await documentClicks()).toEqual([]);
+});

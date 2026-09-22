@@ -164,6 +164,15 @@ setOnOpenRadicleUrl((url) => loadTarget(url));
 // three no-backdrop surfaces -- the ENS trust popover, the permission
 // indicator's popover and the GitHub-bridge panel -- stacked on top of the
 // nodes/main menu.
+//
+// Every module that raises the backdrop for a menu chains this: the
+// hamburger and Nodes menus, the tab and bookmark context menus, the chrome
+// input menu, and the page context menu -- that last one raised from inside
+// the guest rather than from the chrome, which is how it was the one raiser
+// left off the chain (#67). The autocomplete dropdown is the deliberate
+// exception: it is the address bar's own surface and sits alongside the
+// three, so the backdrop *it* raises resets them on `mousedown` instead
+// (`closeAllOverlays`).
 const onAnyMenuOpening = () => {
   hideAutocomplete();
   closeTrustPopover();
@@ -842,7 +851,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   initFindBar({ getActiveWebview }); // In-page find bar (Cmd/Ctrl+F)
   initTabs(); // Creates first tab and starts loading home page
   initAutocomplete(); // Address bar autocomplete
-  initPageContextMenu(); // Page context menu for webviews
+  initPageContextMenu({ onOpening: onAnyMenuOpening }); // Page context menu for webviews
   // Cut/Copy/Paste/Select All for every editable chrome text field — the
   // address bar, the find bar and the bookmark-edit dialog (#316). Passed in
   // explicitly rather than left to the module's fallback so the list of chrome
