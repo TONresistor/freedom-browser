@@ -56,6 +56,7 @@ All notable changes to Freedom will be documented in this file.
   - macOS builds now carry the camera and microphone entitlements and their usage descriptions, so allowing a site can reach the system prompt and Freedom appears under Privacy & Security instead of being refused before it is ever listed
 - A Swarm or IPFS folder address typed without its trailing slash opens the folder
   - It used to land on a "not found" page, with the site's content hash in the address bar in place of its name
+  - A Swarm folder whose name contains a colon (`re:port/`) opens as well; typing one used to leave the tab on the page it was already showing
 
 ### Security
 
