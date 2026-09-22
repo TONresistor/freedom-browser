@@ -54,6 +54,9 @@ All notable changes to Freedom will be documented in this file.
   - `navigator.permissions.query()` and `Notification.permission` no longer report "denied" for a site you have never been asked about, so those sites go on to ask and Freedom's own prompt appears instead of their "access is blocked" screen
   - A remembered or this-session Block still reads as denied, and the prompt is unchanged: an undecided site is still asked about, and blocking it still denies
   - macOS builds now carry the camera and microphone entitlements and their usage descriptions, so allowing a site can reach the system prompt and Freedom appears under Privacy & Security instead of being refused before it is ever listed
+- A Swarm or IPFS folder address typed without its trailing slash opens the folder
+  - It used to land on a "not found" page, with the site's content hash in the address bar in place of its name
+  - A Swarm folder whose name contains a colon (`re:port/`) opens as well; typing one used to leave the tab on the page it was already showing
 - A Settings address that names a section Freedom does not have no longer stands over a different one
   - `freedom://settings/privacy` — a stale bookmark, a typo, a link from an older build — opened Appearance and left its own name in the address bar, so bookmarking, sharing or reloading it went on promising a section that has never existed. The address is now put back on the section actually on screen, the way `chrome://settings/nonsense` is
   - Only the very first arrival at the page was ever corrected, so the case that mattered — a link followed into a Settings tab that is already open — was the one that kept its address
