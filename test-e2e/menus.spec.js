@@ -8,6 +8,15 @@
 // and gives the keyboard back to the button that opened it.
 
 const { test, expect, waitForPopoverFrame, SAMPLE_BZZ_HASH } = require('./fixtures');
+// The permission indicator's popover is the trust popover's sibling on the
+// backdrop-dismissal path (#67), and reaching it needs a real granted
+// permission — the same fixture page and helpers permissions.spec.js drives.
+const {
+  FIXTURE_BODY: PERMISSION_FIXTURE_BODY,
+  clickAsk,
+  answerPrompt,
+  gotoPermissionFixture,
+} = require('./permission-fixtures');
 
 const menuState = (window) =>
   window.evaluate(() => ({
@@ -15,11 +24,14 @@ const menuState = (window) =>
     nodes: document.getElementById('bee-menu-dropdown')?.classList.contains('open') === true,
     flyout: document.getElementById('profile-menu')?.hidden === false,
     backdrop: document.getElementById('menu-backdrop')?.classList.contains('hidden') === false,
-    // The two other surfaces the backdrop is up for (#67): the autocomplete
-    // dropdown raises it, and the trust popover can be open underneath it.
+    // The other surfaces the backdrop is up for (#67): the autocomplete
+    // dropdown raises it, and either address-bar popover — the trust shield's
+    // or the permission indicator's — can be open underneath it.
     dropdown:
       document.getElementById('autocomplete-dropdown')?.classList.contains('hidden') === false,
     popover: document.getElementById('trust-popover')?.hidden === false,
+    permPopover: document.getElementById('permission-popover')?.hidden === false,
+    permExpanded: document.getElementById('permission-indicator')?.getAttribute('aria-expanded'),
     focused: document.activeElement?.id || '',
   }));
 
@@ -393,4 +405,103 @@ test('a click on the backdrop closes the dropdown and the trust popover together
     .toMatchObject({ popover: false, dropdown: false, backdrop: false });
   // The shield stays — only its popover was transient.
   await expect(window.locator('#trust-shield')).toBeVisible();
+});
+
+// The permission indicator's popover is the trust popover's sibling here: the
+// other address-bar surface that raises no backdrop of its own, dismissed by
+// its own document `click` listener in site-permissions-ui.js — so the same
+// press-on-the-backdrop-release-in-the-guest gesture stranded it in exactly
+// the same way, aria-expanded still true over a page with no dropdown and no
+// menu. `closeAllOverlays` closes both.
+
+// A granted permission is what grows the address-bar indicator the popover
+// hangs off.
+const loadGrantedPermission = async (window, harness) => {
+  await harness.setContentFixture(`bzz://${SAMPLE_BZZ_HASH}/`, { body: PERMISSION_FIXTURE_BODY });
+  await gotoPermissionFixture(window);
+  await clickAsk(window);
+  await expect(window.locator('[data-test="permission-prompt"]')).toBeVisible();
+  await answerPrompt(window, 'allow');
+  await expect(window.locator('[data-test="permission-indicator"]')).toBeVisible();
+};
+
+// The popover open *and* the backdrop up — keyboard-driven past the indicator
+// click for the same reason as its trust-popover twin above.
+const raiseTheBackdropOverThePermissionPopover = async (window) => {
+  await window.locator('[data-test="permission-indicator"]').click();
+  await expect(window.locator('#permission-popover')).toBeVisible();
+  await window.keyboard.press('Control+l');
+  await window.keyboard.press('ArrowDown');
+  await expect
+    .poll(() => menuState(window))
+    .toMatchObject({ permPopover: true, dropdown: true, backdrop: true });
+};
+
+test('a press on the backdrop released inside the page closes the permission popover', async ({
+  window,
+  harness,
+}) => {
+  await loadGrantedPermission(window, harness);
+  await raiseTheBackdropOverThePermissionPopover(window);
+
+  const points = await backdropPoints(window);
+  const documentClicks = await watchDocumentClicks(window);
+
+  await window.mouse.move(points.press.x, points.press.y);
+  await window.mouse.down();
+  await window.mouse.move(points.guest.x, points.guest.y);
+  await window.mouse.up();
+
+  await expect
+    .poll(() => menuState(window))
+    .toMatchObject({ permPopover: false, dropdown: false, backdrop: false, permExpanded: 'false' });
+
+  // Same premise as the trust popover's case: no `click` reached this
+  // document, so what closed the popover was the backdrop's own `mousedown`.
+  expect(await documentClicks()).toEqual([]);
+});
+
+test('a click on the backdrop closes the dropdown and the permission popover together', async ({
+  window,
+  harness,
+}) => {
+  await loadGrantedPermission(window, harness);
+  await raiseTheBackdropOverThePermissionPopover(window);
+
+  const points = await backdropPoints(window);
+  await window.mouse.click(points.press.x, points.press.y);
+
+  await expect
+    .poll(() => menuState(window))
+    .toMatchObject({ permPopover: false, dropdown: false, backdrop: false, permExpanded: 'false' });
+  // The indicator stays — only its popover was transient.
+  await expect(window.locator('[data-test="permission-indicator"]')).toBeVisible();
+});
+
+// Opening a menu puts the permission popover away too, the other half of the
+// mirror: `onAnyMenuOpening` chains the same set as `closeAllOverlays`, so the
+// popover can never end up stacked under a menu.
+//
+// Driven from the *tab context* menu rather than the hamburger on purpose. A
+// left-click on any chrome button is itself a click-away that the popover's own
+// document `click` listener already closes it on, so that gesture passes
+// whether or not `onAnyMenuOpening` chains this popover — it proves nothing.
+// A right-click dispatches `contextmenu` and no `click`, so the raiser's own
+// chain is the only thing that can close the popover here.
+test('right-clicking a tab to open its menu closes the permission popover', async ({
+  window,
+  harness,
+}) => {
+  await loadGrantedPermission(window, harness);
+  await window.locator('[data-test="permission-indicator"]').click();
+  await expect(window.locator('#permission-popover')).toBeVisible();
+
+  const documentClicks = await watchDocumentClicks(window);
+  await window.locator('[data-test="tab"]').first().click({ button: 'right' });
+
+  await expect(window.locator('#tab-context-menu')).toBeVisible();
+  await expect
+    .poll(() => menuState(window))
+    .toMatchObject({ permPopover: false, permExpanded: 'false' });
+  expect(await documentClicks()).toEqual([]);
 });
