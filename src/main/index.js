@@ -586,10 +586,16 @@ let isQuitting = false;
 let shutdownSettled = false;
 
 // Bound on how long a re-entrant quit is held back. Holding it unconditionally
-// would let one wedged manager keep the app alive forever; this sits well above
-// the longest stop budget underneath it (Ant and Tor each SIGKILL their child
-// 5s after asking it to stop, and the IPFS dispatcher falls back to
-// terminate() after 2s). Measured wind-downs on a dev box are ~30-120ms.
+// would let one wedged manager keep the app alive forever. Measured wind-downs
+// on a dev box are ~30-120ms, but this has to stay above the *longest* stop
+// budget underneath it, or the watchdog fires while a manager is still inside
+// its own budget and the quit proceeds with the wind-down unfinished. Longest
+// first, as of this commit: Tor SIGKILLs arti 10s after the SIGTERM
+// (tor-manager.js), Ant SIGKILLs antd after 5s (ant-manager.js), Myotis waits
+// 5s for its child to exit (myotis-process.js EXIT_WAIT_MS), and the IPFS
+// dispatcher falls back to terminate() after 2s
+// (freedom-ipfs-native-node.js DISPATCHER_STOP_TIMEOUT_MS). Re-derive against
+// those four before trimming this number.
 const SHUTDOWN_WATCHDOG_MS = 20_000;
 
 // Everything that has to happen before the process may go away. Split out of

@@ -13,10 +13,13 @@
 // down while the wind-down was still awaiting the node stops — destroying the
 // dispatcher worker's env mid-`gatewayWaitNextEvent`, whose throw then hit
 // node-addon-api's fatal `Error::ThrowAsJavaScriptException napi_throw` path.
-// So both assertions below matter: the exit status, and the absence of that
-// line on stderr. Before the fix this reproduced on 7 of 10 runs.
+// So both of watchProcessExit()'s assertions matter: the exit status, and the
+// absence of that line on stderr. Before the fix this reproduced on 7 of 10
+// runs. The packaged artifact's own copy of this check lives in
+// test-e2e/packaged-live/nodes.spec.js — #345 reproduces there too, and a
+// wrong-arch or stale freedom-ipfs addon can only differ on teardown there.
 
-const { test, expect, HAS_IPFS_NATIVE_ADDON } = require('../live-fixtures');
+const { test, expect, watchProcessExit, HAS_IPFS_NATIVE_ADDON } = require('../live-fixtures');
 
 // Only IPFS. Ant, Radicle and Tor have nothing to do with this quit path and
 // their boot time (and flakiness) would be paid for nothing.
@@ -43,11 +46,9 @@ test.describe('quitting with the native IPFS node running', () => {
     window,
     electronApp,
   }) => {
-    const child = electronApp.process();
-    let stderr = '';
-    child.stderr.on('data', (chunk) => {
-      stderr += chunk.toString();
-    });
+    // Armed before the node starts so nothing the shutdown prints can be
+    // missed. Asserted after the quit below.
+    const expectCleanExit = watchProcessExit(electronApp, { timeout: QUIT_TIMEOUT_MS });
 
     // The dispatcher worker only exists once the node is actually running.
     await expect
@@ -67,10 +68,6 @@ test.describe('quitting with the native IPFS node running', () => {
     expect(ipfs.mode).toBe('bundled');
     expect(ipfs.backend).toBe('freedom-ipfs');
 
-    const exited = new Promise((resolve) => {
-      child.once('exit', (code, signal) => resolve({ code, signal }));
-    });
-
     try {
       await electronApp.close();
     } catch {
@@ -78,15 +75,6 @@ test.describe('quitting with the native IPFS node running', () => {
       // the exit status below is what this spec is actually asserting on.
     }
 
-    const result = await Promise.race([
-      exited,
-      new Promise((resolve) => setTimeout(() => resolve({ code: 'timed out' }), QUIT_TIMEOUT_MS)),
-    ]);
-
-    expect(
-      stderr,
-      'the IPFS dispatcher worker threw into a torn-down env during quit'
-    ).not.toContain('FATAL ERROR');
-    expect(result).toEqual({ code: 0, signal: null });
+    await expectCleanExit();
   });
 });
