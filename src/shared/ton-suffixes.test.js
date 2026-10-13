@@ -1,7 +1,7 @@
 const { TON_SUFFIXES, isTonHost } = require('./ton-suffixes');
 
 describe('TON hostname policy', () => {
-  test.each(['foundation.ton', 'foundation.ton.', 'site.adnl', 'archive.bag', 'name.t.me'])(
+  test.each(['foundation.ton', 'foundation.ton.', 'site.adnl', 'archive.bag'])(
     'accepts %s',
     (host) => expect(isTonHost(host)).toBe(true)
   );

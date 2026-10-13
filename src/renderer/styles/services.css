@@ -324,7 +324,7 @@
   }
 }
 
-/* Tor and TON proxy sections — both use the standard service toggle shape. */
+/* Tor (.onion) section — mirrors the Radicle section styling */
 .tor-toggle,
 .ton-toggle {
   display: flex;
@@ -397,8 +397,9 @@
 
 /*
  * Same gate as the Radicle/IPFS info panels: nothing renders beneath the toggle
- * while the service is off (#349). The matching UI module is the sole writer
- * of the class; individual rows still self-manage inside a visible block.
+ * while the node is off (#349). `tor-ui.js`'s updateTorInfoVisibility is the
+ * sole writer of the class; individual rows still self-manage inside a visible
+ * block (status via .node-status-row, version via [hidden] in external mode).
  */
 .tor-info:not(.visible),
 .ton-info:not(.visible) {
@@ -433,13 +434,9 @@
 }
 
 .ton-toggle.disabled {
-  /* Keep the service label readable in both themes; only the unavailable
-     control is dimmed. The full-row opacity fails WCAG contrast. */
   pointer-events: none;
 }
 
-/* The toggle is also a disabled .menu-item, whose shared rule dims the entire
-   row. Restore the normal label treatment and dim only the switch below. */
 .ton-toggle.menu-item:disabled {
   color: var(--text);
   opacity: 1;

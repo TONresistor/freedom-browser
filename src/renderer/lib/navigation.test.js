@@ -292,15 +292,7 @@ const loadNavigationModule = async (options = {}) => {
       return `web3://${match[1].toLowerCase()}${chainId === 1 ? '' : `:${chainId}`}${suffix}`;
     }),
     looksLikeOnchainAppInput: jest.fn((input) => /^web3:/i.test((input || '').trim())),
-    parseTonInput: jest.fn((input) => {
-      const match = (input || '').trim().match(/^(?:(?:https?|tonsite|ton):\/\/)?([^/?#]+)(.*)$/i);
-      if (!match || !/\.(?:ton|adnl|bag)$|\.t\.me$/i.test(match[1])) return null;
-      const tail = match[2] || '';
-      return {
-        targetUrl: `http://${match[1].toLowerCase()}${tail || '/'}`,
-        displayValue: `tonsite://${match[1].toLowerCase()}${tail === '/' ? '' : tail}`,
-      };
-    }),
+    parseTonInput: jest.requireActual('./url-utils.js').parseTonInput,
     deriveDisplayValue: jest.fn((url) => `display:${url}`),
     deriveBzzBaseFromUrl: jest.fn((url) =>
       url.includes('/bzz/') ? 'https://gateway.example/bzz/hash/' : null
@@ -2442,7 +2434,7 @@ describe('navigation', () => {
       expect(loadedUrl).not.toContain('error.html');
     });
 
-    test('TON: normalizes TON schemes to the loopback-proxied HTTP transport', async () => {
+    test('TON: normalizes TON schemes to the native tonsite transport', async () => {
       const ctx = await loadNavigationModule();
       await ctx.mod.initNavigation();
 
@@ -2450,11 +2442,11 @@ describe('navigation', () => {
       await flushMicrotasks();
 
       expect(ctx.activeRef.tab.webview.loadURL).toHaveBeenLastCalledWith(
-        'http://foundation.ton/docs?q=1'
+        'tonsite://foundation.ton/docs?q=1'
       );
       expect(ctx.elements.addressInput.value).toBe('tonsite://foundation.ton/docs?q=1');
       expect(ctx.activeRef.tab.navigationState.pendingNavigationUrl).toBe(
-        'http://foundation.ton/docs?q=1'
+        'tonsite://foundation.ton/docs?q=1'
       );
     });
 
@@ -2470,7 +2462,7 @@ describe('navigation', () => {
       expect(loadedUrl).toContain('protocol=ton');
       expect(loadedUrl).toContain(encodeURIComponent('tonsite://foundation.ton'));
       expect(ctx.activeRef.tab.webview.loadURL).not.toHaveBeenCalledWith(
-        'http://foundation.ton/'
+        'tonsite://foundation.ton/'
       );
       expect(ctx.elements.addressInput.value).toBe('tonsite://foundation.ton');
     });

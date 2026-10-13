@@ -12,6 +12,7 @@ const loadTonModule = async (options = {}) => {
   jest.resetModules();
 
   const state = {
+    enableTonIntegration: options.enabled !== false,
     currentTonStatus: options.currentTonStatus || 'stopped',
     suppressTonRunningStatus: options.suppressTonRunningStatus ?? false,
     registry: {
@@ -83,6 +84,7 @@ const loadTonModule = async (options = {}) => {
         };
 
   global.window = {
+    addEventListener: jest.fn(),
     ton: tonApi,
   };
   global.document = document;
@@ -188,7 +190,6 @@ describe('ton-ui', () => {
     expect(ctx.elements.tonToggleBtn.getAttribute('disabled')).toBe('true');
     expect(ctx.debugMocks.pushDebug).toHaveBeenCalledWith('TON binary not found - toggle disabled');
 
-    // Click should not fire start
     ctx.elements.tonToggleBtn.dispatch('click');
     expect(ctx.tonApi.start).not.toHaveBeenCalled();
   });
@@ -200,13 +201,12 @@ describe('ton-ui', () => {
     });
 
     ctx.mod.initTonUi();
-    ctx.mod.initTonUi(); // second call
+    ctx.mod.initTonUi();
     await flushMicrotasks();
 
     ctx.elements.tonToggleBtn.dispatch('click');
     await flushMicrotasks();
 
-    // start should only be called once despite two initTonUi calls
     expect(ctx.tonApi.start).toHaveBeenCalledTimes(1);
   });
 
@@ -287,6 +287,18 @@ describe('ton-ui', () => {
 
     expect(ctx.tonApi.onStatusUpdate).toHaveBeenCalledWith(expect.any(Function));
     expect(ctx.tonApi.getStatus).not.toHaveBeenCalled();
+  });
+
+  test('a disabled profile stays unavailable after the asynchronous binary check', async () => {
+    const ctx = await loadTonModule();
+    ctx.mod.initTonUi();
+    ctx.getStatusHandler()({ status: 'stopped', mode: 'disabled' });
+    await flushMicrotasks();
+    expect(ctx.elements.tonToggleBtn.getAttribute('disabled')).toBe('true');
+    ctx.elements.tonToggleBtn.dispatch('click');
+    expect(ctx.tonApi.start).not.toHaveBeenCalled();
+    ctx.getStatusHandler()({ status: 'stopped', mode: 'none' });
+    expect(ctx.elements.tonToggleBtn.getAttribute('disabled')).toBeUndefined();
   });
 
   test('keeps an error message visible in the info panel', async () => {

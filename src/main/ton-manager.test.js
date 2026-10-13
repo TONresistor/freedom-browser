@@ -121,7 +121,6 @@ function createHttpRequestMock(responseResolver) {
     const responseConfig = resolveResponse(options);
 
     if (responseConfig?.error) {
-      // Defer so end() is called first
       setTimeout(() => requestHandlers.get('error')?.(responseConfig.error), 0);
       return request;
     }
@@ -165,6 +164,12 @@ function loadTonManagerModule(options = {}) {
     getAllWindows: jest.fn(() => windows),
   };
   const requestSession = options.requestSession || {};
+  const registerTonProtocol = jest.fn();
+  const settings = { enableTonIntegration: options.enabled !== false };
+  const onSettingsChanged = jest.fn();
+  const activeProfile = {
+    metadata: { nodes: { ton: { mode: options.profileMode || 'managed' } } },
+  };
   const webContents = {
     fromId: jest.fn((id) => {
       if (!Number.isInteger(id)) throw new TypeError('webContentsId must be an integer');
@@ -182,8 +187,6 @@ function loadTonManagerModule(options = {}) {
   const clearErrorState = jest.fn();
   const clearService = jest.fn();
   const registerWebRequestHandler = jest.fn();
-  const applyTonProxy = options.applyTonProxy || jest.fn(() => Promise.resolve());
-  const clearTonProxy = options.clearTonProxy || jest.fn(() => Promise.resolve());
   const spawnedProcesses = [];
   const spawn = jest.fn((binary, args = [], spawnOptions = {}) => {
     const proc = (options.createProcess || createProcessMock)(binary, options.processOptions || {});
@@ -225,13 +228,24 @@ function loadTonManagerModule(options = {}) {
       http: () => ({ request: httpRequest }),
       net: () => ({ Socket }),
       [require.resolve('./logger')]: () => log,
-      [require.resolve('./tor-proxy')]: () => ({ applyTonProxy, clearTonProxy }),
+      [require.resolve('./ton-protocol')]: () => ({ registerTonProtocol }),
+      [require.resolve('./settings-store')]: () => ({
+        loadSettings: () => settings,
+        onSettingsChanged,
+      }),
+      [require.resolve('./profile-resolver')]: () => ({ getActiveProfile: () => activeProfile }),
       [require.resolve('./profile-paths')]: () => ({
         getTonDataDir: jest.fn(() => '/tmp/freedom-user-data/ton-data'),
       }),
       [require.resolve('./webrequest-dispatcher')]: () => ({ registerWebRequestHandler }),
       [require.resolve('./service-registry')]: () => ({
-        MODE: { BUNDLED: 'bundled', REUSED: 'reused', EXTERNAL: 'external', NONE: 'none' },
+        MODE: {
+          BUNDLED: 'bundled',
+          REUSED: 'reused',
+          EXTERNAL: 'external',
+          DISABLED: 'disabled',
+          NONE: 'none',
+        },
         DEFAULTS: {
           ton: { proxyPort: 18085, fallbackRange: 10 },
         },
@@ -245,11 +259,13 @@ function loadTonManagerModule(options = {}) {
   });
 
   return {
-    applyTonProxy,
+    registerTonProtocol,
+    activeProfile,
+    settings,
+    onSettingsChanged,
     BrowserWindow,
     clearErrorState,
     clearService,
-    clearTonProxy,
     fsMock,
     httpRequest,
     ipcMain,
@@ -301,18 +317,19 @@ describe('ton-manager', () => {
     expect(ctx.registerWebRequestHandler).toHaveBeenCalledWith(
       'onBeforeRequest',
       'ton-routing-guard',
-      ctx.mod.guardTonRequest
+      ctx.mod.guardTonRequest,
+      { failClosed: true }
     );
-    expect(
-      ctx.mod.guardTonRequest({ url: 'http://foundation.ton/', webContentsId: 42 })
-    ).toEqual({ cancel: true });
-    expect(
-      ctx.mod.guardTonRequest({ url: 'http://foundation.ton./', webContentsId: 42 })
-    ).toEqual({ cancel: true });
-    expect(ctx.mod.guardTonRequest({ url: 'https://name.t.me/', webContentsId: 42 })).toEqual({
+    expect(ctx.mod.guardTonRequest({ url: 'http://foundation.ton/', webContentsId: 42 })).toEqual({
       cancel: true,
     });
-    expect(ctx.mod.guardTonRequest({ url: 'wss://socket.foundation.ton/', webContentsId: 42 })).toEqual({
+    expect(ctx.mod.guardTonRequest({ url: 'http://foundation.ton./', webContentsId: 42 })).toEqual({
+      cancel: true,
+    });
+    expect(ctx.mod.guardTonRequest({ url: 'https://name.t.me/', webContentsId: 42 })).toBeNull();
+    expect(
+      ctx.mod.guardTonRequest({ url: 'wss://socket.foundation.ton/', webContentsId: 42 })
+    ).toEqual({
       cancel: true,
     });
     expect(ctx.mod.guardTonRequest({ url: 'https://t.me/freedom', webContentsId: 42 })).toBeNull();
@@ -340,20 +357,18 @@ describe('ton-manager', () => {
     const window = createWindowMock();
     const ctx = loadTonManagerModule({
       windows: [window],
-      portSequence: [false], // default port 18085 is free
+      portSequence: [false],
       httpResponse: () => ({ statusCode: 200 }),
     });
 
     const startPromise = ctx.mod.startTon();
     await flushMicrotasks();
 
-    // Should be STARTING before health check resolves
     expect(window.webContents.send).toHaveBeenCalledWith(
       IPC.TON_STATUS_UPDATE,
       expect.objectContaining({ status: 'starting' })
     );
 
-    // Advance to first health poll (3 s)
     await jest.advanceTimersByTimeAsync(3000);
     await flushMicrotasks();
     await startPromise;
@@ -384,7 +399,6 @@ describe('ton-manager', () => {
       expect.objectContaining({ status: 'running' })
     );
 
-    // Clean up
     const stopPromise = ctx.mod.stopTon();
     await jest.advanceTimersByTimeAsync(0);
     await flushMicrotasks();
@@ -395,7 +409,7 @@ describe('ton-manager', () => {
     jest.useFakeTimers();
 
     const ctx = loadTonManagerModule({
-      portSequence: [true, false], // 18085 busy, 18086 free
+      portSequence: [true, false],
       httpResponse: () => ({ statusCode: 200 }),
     });
 
@@ -443,180 +457,74 @@ describe('ton-manager', () => {
     expect(statusCalls[statusCalls.length - 1]).toBe('stopped');
   });
 
-  test('applies TON routing after the first successful health probe', async () => {
+  test('registers independent handlers for normal and private sessions and never changes PAC', async () => {
     jest.useFakeTimers();
-
-    const ctx = loadTonManagerModule({
-      portSequence: [false],
-      httpResponse: () => ({ statusCode: 200 }),
-    });
-
-    const targetSession = ctx.requestSession;
-    ctx.mod.registerTonRoutingSession('default', targetSession);
-
-    await ctx.mod.startTon();
-    await flushMicrotasks();
-    await jest.advanceTimersByTimeAsync(3000);
-    await flushMicrotasks();
-
-    expect(ctx.applyTonProxy).toHaveBeenCalledWith(targetSession, '127.0.0.1:18085');
-    expect(
-      ctx.mod.guardTonRequest({ url: 'http://foundation.ton/', webContentsId: 42 })
-    ).toBeNull();
-
-    const stopPromise = ctx.mod.stopTon();
-    await jest.advanceTimersByTimeAsync(0);
-    await flushMicrotasks();
-    await stopPromise;
-    expect(
-      ctx.mod.guardTonRequest({ url: 'http://foundation.ton/', webContentsId: 42 })
-    ).toEqual({ cancel: true });
-  });
-
-  test('clears TON routing when the process stops', async () => {
-    jest.useFakeTimers();
-
-    const ctx = loadTonManagerModule({
-      portSequence: [false],
-      httpResponse: () => ({ statusCode: 200 }),
-    });
-
-    const targetSession = {};
-    ctx.mod.registerTonRoutingSession('default', targetSession);
-
-    await ctx.mod.startTon();
-    await flushMicrotasks();
-    await jest.advanceTimersByTimeAsync(3000);
-    await flushMicrotasks();
-
-    const stopPromise = ctx.mod.stopTon();
-    await jest.advanceTimersByTimeAsync(0);
-    await flushMicrotasks();
-    await stopPromise;
-
-    expect(ctx.clearTonProxy).toHaveBeenCalledWith(targetSession);
-  });
-
-  test('does not report stop completion until session routing is cleared', async () => {
-    jest.useFakeTimers();
-    let releaseRouting;
-    const clearTonProxy = jest.fn(
-      () => new Promise((resolve) => {
-        releaseRouting = resolve;
-      })
-    );
-    const ctx = loadTonManagerModule({
-      clearTonProxy,
-      portSequence: [false],
-      httpResponse: () => ({ statusCode: 200 }),
-    });
-    ctx.mod.registerTonRoutingSession('default', {});
-
-    await ctx.mod.startTon();
-    await jest.advanceTimersByTimeAsync(3000);
-    await flushMicrotasks();
-
-    let stopped = false;
-    const stopPromise = ctx.mod.stopTon().then(() => {
-      stopped = true;
-    });
-    await jest.advanceTimersByTimeAsync(0);
-    await flushMicrotasks();
-    expect(stopped).toBe(false);
-
-    releaseRouting();
-    await stopPromise;
-    expect(stopped).toBe(true);
-  });
-
-  test('keeps TON routing fail-closed after an unexpected process exit', async () => {
-    jest.useFakeTimers();
-    const window = createWindowMock();
-    const targetSession = {};
-    const ctx = loadTonManagerModule({
-      windows: [window],
-      portSequence: [false],
-      httpResponse: () => ({ statusCode: 200 }),
-    });
-    ctx.mod.registerTonRoutingSession('default', targetSession);
-
-    await ctx.mod.startTon();
-    await jest.advanceTimersByTimeAsync(3000);
-    await flushMicrotasks();
-    ctx.clearTonProxy.mockClear();
-
-    ctx.spawnedProcesses[0].emit('close', 1);
-    await flushMicrotasks();
-
-    expect(ctx.clearTonProxy).not.toHaveBeenCalled();
-    expect(window.webContents.send).toHaveBeenLastCalledWith(
-      IPC.TON_STATUS_UPDATE,
-      expect.objectContaining({ status: 'error', error: 'TON proxy exited with code 1' })
-    );
-
-    await ctx.mod.stopTon();
-    expect(ctx.clearTonProxy).toHaveBeenCalledWith(targetSession);
-  });
-
-  test('does not clear fail-closed routing when the child exits during PAC installation', async () => {
-    jest.useFakeTimers();
-    let finishApply;
-    const applyTonProxy = jest.fn(
-      () => new Promise((resolve) => {
-        finishApply = resolve;
-      })
-    );
-    const ctx = loadTonManagerModule({
-      applyTonProxy,
-      portSequence: [false],
-      httpResponse: () => ({ statusCode: 200 }),
-    });
+    const ctx = loadTonManagerModule();
+    const privateSession = { setProxy: jest.fn() };
     ctx.mod.registerTonRoutingSession('default', ctx.requestSession);
-
+    ctx.mod.registerTonRoutingSession('private', privateSession);
+    expect(ctx.registerTonProtocol).toHaveBeenCalledTimes(2);
     await ctx.mod.startTon();
     await jest.advanceTimersByTimeAsync(3000);
-    await flushMicrotasks();
-    expect(applyTonProxy).toHaveBeenCalled();
-
-    ctx.spawnedProcesses[0].emit('close', 1);
-    finishApply();
-    await flushMicrotasks();
-
-    expect(ctx.clearTonProxy).not.toHaveBeenCalled();
     expect(
-      ctx.mod.guardTonRequest({ url: 'http://foundation.ton/', webContentsId: 42 })
-    ).toBeNull();
+      ctx.mod.guardTonRequest({ url: 'https://foundation.ton/docs', webContentsId: 42 })
+    ).toEqual({ redirectURL: 'tonsite://foundation.ton/docs' });
+    expect(ctx.mod.guardTonRequest({ url: 'http://name.t.me/', webContentsId: 42 })).toBeNull();
+    expect(privateSession.setProxy).not.toHaveBeenCalled();
+    expect(ctx.mod.getProxyUrl()).toBe('http://127.0.0.1:18085');
+    ctx.spawnedProcesses[0].emit('close', 1);
+    expect(ctx.mod.getProxyUrl()).toBeNull();
+    expect(ctx.mod.guardTonRequest({ url: 'http://foundation.ton/', webContentsId: 42 })).toEqual({
+      cancel: true,
+    });
   });
 
-  test('keeps the request guard closed when stop races PAC installation', async () => {
+  test('disabling the integration closes routing immediately and stops the process', async () => {
     jest.useFakeTimers();
-    let finishApply;
-    const applyTonProxy = jest.fn(
-      () => new Promise((resolve) => {
-        finishApply = resolve;
-      })
-    );
-    const ctx = loadTonManagerModule({
-      applyTonProxy,
-      portSequence: [false],
-      httpResponse: () => ({ statusCode: 200 }),
-    });
+    const ctx = loadTonManagerModule();
+    ctx.mod.registerTonIpc();
     ctx.mod.registerTonRoutingSession('default', ctx.requestSession);
-
     await ctx.mod.startTon();
     await jest.advanceTimersByTimeAsync(3000);
-    await flushMicrotasks();
-    const stopPromise = ctx.mod.stopTon();
+    ctx.settings.enableTonIntegration = false;
+    ctx.onSettingsChanged.mock.calls[0][0](ctx.settings);
+    expect(ctx.mod.getProxyUrl()).toBeNull();
+    expect(ctx.spawnedProcesses[0].kill).toHaveBeenCalledWith('SIGTERM');
     await jest.advanceTimersByTimeAsync(0);
-    await flushMicrotasks();
+  });
 
-    finishApply();
-    await stopPromise;
-    await flushMicrotasks();
+  test('a profile disabled in Nodes cannot start or route TON traffic', async () => {
+    const ctx = loadTonManagerModule({ profileMode: 'disabled' });
+    await ctx.mod.syncProfileMode();
+    await ctx.mod.startTon();
+    expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.mod.getProxyUrl()).toBeNull();
+    expect(ctx.updateService).toHaveBeenCalledWith('ton', { proxy: null, mode: 'disabled' });
+  });
 
-    expect(
-      ctx.mod.guardTonRequest({ url: 'http://foundation.ton/', webContentsId: 42 })
-    ).toEqual({ cancel: true });
+  test('disabling a running profile stops it and re-enabling allows a later manual start', async () => {
+    jest.useFakeTimers();
+    const ctx = loadTonManagerModule();
+    await ctx.mod.startTon();
+    await jest.advanceTimersByTimeAsync(3000);
+    ctx.activeProfile.metadata.nodes.ton.mode = 'disabled';
+    const stopped = ctx.mod.syncProfileMode();
+    expect(ctx.mod.getProxyUrl()).toBeNull();
+    await jest.advanceTimersByTimeAsync(0);
+    await stopped;
+    expect(ctx.spawnedProcesses[0].kill).toHaveBeenCalledWith('SIGTERM');
+    expect(ctx.updateService).toHaveBeenLastCalledWith('ton', { proxy: null, mode: 'disabled' });
+    ctx.activeProfile.metadata.nodes.ton.mode = 'managed';
+    await ctx.mod.syncProfileMode();
+    await ctx.mod.startTon();
+    expect(ctx.spawn).toHaveBeenCalledTimes(2);
+  });
+
+  test('disabled integration cannot spawn a proxy', async () => {
+    const ctx = loadTonManagerModule({ enabled: false });
+    await ctx.mod.startTon();
+    expect(ctx.spawn).not.toHaveBeenCalled();
+    expect(ctx.mod.getProxyUrl()).toBeNull();
   });
 
   test('transitions STARTING → ERROR when spawn emits error', async () => {
@@ -627,7 +535,6 @@ describe('ton-manager', () => {
       httpResponse: () => ({ error: new Error('network down') }),
       createProcess: (binary, opts) => {
         const proc = createProcessMock(binary, opts);
-        // Trigger process error event asynchronously
         proc.on = jest.fn((event, handler) => {
           if (!proc._listeners) proc._listeners = new Map();
           if (!proc._listeners.has(event)) proc._listeners.set(event, []);
@@ -671,7 +578,6 @@ describe('ton-manager', () => {
 
     const sentChannels = window.webContents.send.mock.calls.map((c) => c[0]);
     const tonUpdates = sentChannels.filter((ch) => ch === IPC.TON_STATUS_UPDATE);
-    // At minimum: starting + running = 2 broadcasts
     expect(tonUpdates.length).toBeGreaterThanOrEqual(2);
 
     const stopPromise = ctx.mod.stopTon();
@@ -688,7 +594,6 @@ describe('ton-manager', () => {
   });
 
   test('transitions to ERROR when all fallback ports are busy', async () => {
-    // All 11 probes (default + 10 fallbacks) report the port as open
     const ctx = loadTonManagerModule({
       portSequence: Array(11).fill(true),
     });
@@ -707,9 +612,6 @@ describe('ton-manager', () => {
     jest.useFakeTimers();
 
     const window = createWindowMock();
-    // Use a synchronous-error http mock: fires the error handler in .end() so
-    // that probeTonProxy resolves within the same fake-timer tick without
-    // relying on an inner setTimeout(0) that fake timers schedule-deferred.
     const syncErrorHttpRequest = jest.fn((_options, _callback) => {
       const requestHandlers = new Map();
       const request = {
@@ -735,8 +637,6 @@ describe('ton-manager', () => {
     ctx.mod.startTon();
     await flushMicrotasks();
 
-    // Advance through all 60 poll intervals; each probe fails synchronously
-    // so flushMicrotasks() is sufficient to settle each iteration.
     for (let i = 0; i < 60; i++) {
       await jest.advanceTimersByTimeAsync(3000);
       await flushMicrotasks();
@@ -751,8 +651,6 @@ describe('ton-manager', () => {
   test('escalates to SIGKILL when SIGTERM does not close process within 5 s', async () => {
     jest.useFakeTimers();
 
-    // Process ignores SIGTERM: autoCloseOnKill=false prevents the mock from
-    // auto-emitting 'close', simulating a hung process.
     const ctx = loadTonManagerModule({
       portSequence: [false],
       httpResponse: () => ({ statusCode: 200 }),
@@ -769,7 +667,6 @@ describe('ton-manager', () => {
 
     expect(ctx.spawnedProcesses[0].kills).toContain('SIGTERM');
 
-    // Advance 5 s to trigger the force-kill timeout
     await jest.advanceTimersByTimeAsync(5000);
     await flushMicrotasks();
 

@@ -98,7 +98,7 @@ export const detectProtocol = (url) => {
     try {
       const { hostname } = new URL(url);
       if (isTonHost(hostname)) return 'ton';
-    } catch { /* ignore */ }
+    } catch { return 'http'; }
     return 'http';
   }
   return 'unknown';

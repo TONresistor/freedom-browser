@@ -1,14 +1,9 @@
-'use strict';
+export const TON_SUFFIXES = Object.freeze(['.ton', '.adnl', '.bag']);
 
-const TON_SUFFIXES = ['.ton', '.adnl', '.bag', '.t.me'];
-
-function isTonHost(host) {
-  if (!host || typeof host !== 'string') return false;
-  const lower = host.toLowerCase().split(':')[0].replace(/\.$/, '');
-  for (const suffix of TON_SUFFIXES) {
-    if (lower.endsWith(suffix)) return true;
-  }
-  return false;
+export function isTonHost(host, explicit = false) {
+  if (typeof host !== 'string' || !host) return false;
+  const lower = host.toLowerCase().replace(/\.$/, '');
+  return (
+    TON_SUFFIXES.some((suffix) => lower.endsWith(suffix)) || (explicit && lower.endsWith('.t.me'))
+  );
 }
-
-module.exports = { TON_SUFFIXES, isTonHost };

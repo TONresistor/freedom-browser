@@ -1,50 +1,18 @@
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
-const { downloadToFile, TIMEOUTS } = require('./lib/fetch-with-retry');
-
-// Pin to a specific release. Update src/shared/ton-version.js to upgrade.
-const { RELEASE_TAG } = require('../src/shared/ton-version');
+const os = require('os');
+const { execFileSync } = require('child_process');
+const { RELEASE_TAG, PINNED_SOURCE_COMMIT } = require('../src/shared/ton-version');
 
 const OUTPUT_DIR = path.join(__dirname, '..', 'ton-bin');
-const RELEASE_REPO = 'TONresistor/Tonutils-Proxy';
+const RELEASE_REPO = 'xssnick/Tonutils-Proxy';
 const BINARY_NAME = 'tonutils-freedom-cli';
-// Source commit behind v0.1.0-freedom. This documents the reviewed source;
-// the binary trust roots are the per-asset SHA-256 values below.
-const PINNED_SOURCE_COMMIT = '0b4eb46be7c073d6b3e94421b4b80e9b807a246c';
-
 const TARGETS = [
-  {
-    os: 'mac',
-    arch: 'arm64',
-    asset: `${BINARY_NAME}-darwin-arm64`,
-    sha256: 'fc8f5605ebe36dc48606504cad468a9d00990dc8892297d8e9183c583ef2fddd',
-  },
-  {
-    os: 'mac',
-    arch: 'x64',
-    asset: `${BINARY_NAME}-darwin-amd64`,
-    sha256: 'cd59cc9bbfb906d0622e5ecbb649c8c17b5f1e42f457680f480ed2de7b948c34',
-  },
-  {
-    os: 'linux',
-    arch: 'x64',
-    asset: `${BINARY_NAME}-linux-amd64`,
-    sha256: 'a81387bd03342a31f6747d808955cde7b18c304c23194a2521b1cfa80927f726',
-  },
-  {
-    os: 'linux',
-    arch: 'arm64',
-    asset: `${BINARY_NAME}-linux-arm64`,
-    sha256: 'cc73061c9129fd68c883830e0d457c0dfdb5fe4b788f65ee8f1d6d8117bba266',
-  },
-  {
-    os: 'win',
-    arch: 'x64',
-    asset: `${BINARY_NAME}-windows-amd64.exe`,
-    sha256: '21debf32524f5d4b97e91619909afbbd80aa477ec6c4b9151900598ce76a6992',
-    exe: true,
-  },
+  { os: 'mac', arch: 'arm64' },
+  { os: 'mac', arch: 'x64' },
+  { os: 'linux', arch: 'x64' },
+  { os: 'linux', arch: 'arm64' },
+  { os: 'win', arch: 'x64', exe: true },
 ];
 
 function runtimeTarget(platform = process.platform, arch = process.arch) {
@@ -81,32 +49,8 @@ function selectedTargets(args = [], platform = process.platform, arch = process.
   const target = TARGETS.find(
     ({ os, arch: targetArch }) => os === selected.os && targetArch === selected.arch
   );
-  if (!target) throw new Error(`No pinned TON proxy asset for ${selected.os}-${selected.arch}`);
+  if (!target) throw new Error(`No TON proxy build target for ${selected.os}-${selected.arch}`);
   return [target];
-}
-
-function buildDownloadUrl(tag, asset) {
-  return `https://github.com/${RELEASE_REPO}/releases/download/${tag}/${asset}`;
-}
-
-function downloadFile(url, dest, options = {}) {
-  console.log(`Downloading ${url} to ${dest}...`);
-  return downloadToFile(url, dest, {
-    label: `TON proxy asset ${path.basename(dest)}`,
-    headers: { 'User-Agent': 'Freedom-Updater' },
-    timeoutMs: TIMEOUTS.binary,
-    ...options,
-  });
-}
-
-function sha256File(filePath) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash('sha256');
-    const stream = fs.createReadStream(filePath);
-    stream.on('data', (chunk) => hash.update(chunk));
-    stream.on('end', () => resolve(hash.digest('hex')));
-    stream.on('error', reject);
-  });
 }
 
 function checkBinary() {
@@ -126,38 +70,71 @@ function checkBinary() {
 }
 
 async function installTarget(target, options = {}) {
+  const run = options.run || execFileSync;
+  const sourceDir =
+    options.sourceDir || fs.mkdtempSync(path.join(os.tmpdir(), 'freedom-ton-source-'));
   const outputDir = options.outputDir || OUTPUT_DIR;
-  const downloader = options.download || downloadFile;
   const targetDir = path.join(outputDir, `${target.os}-${target.arch}`);
   fs.mkdirSync(targetDir, { recursive: true });
-
-  const binName = target.exe ? `${BINARY_NAME}.exe` : BINARY_NAME;
-  const destFile = path.join(targetDir, binName);
-  const tempFile = `${destFile}.download`;
-
-  try {
-    if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
-    await downloader(buildDownloadUrl(RELEASE_TAG, target.asset), tempFile);
-    const actual = await sha256File(tempFile);
-    if (actual !== target.sha256) {
-      throw new Error(
-        `Checksum mismatch for ${target.asset}: expected ${target.sha256}, got ${actual}`
-      );
-    }
-    if (!target.exe) fs.chmodSync(tempFile, 0o755);
-    fs.renameSync(tempFile, destFile);
-    console.log(`Installed ${BINARY_NAME} for ${target.os}-${target.arch} (sha256: ${actual})`);
-    return destFile;
-  } catch (err) {
-    if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
-    throw err;
+  if (!options.sourceDir) {
+    run('git', ['init', sourceDir], { stdio: 'pipe' });
+    run(
+      'git',
+      [
+        '-C',
+        sourceDir,
+        'fetch',
+        '--depth=1',
+        `https://github.com/${RELEASE_REPO}.git`,
+        PINNED_SOURCE_COMMIT,
+      ],
+      { stdio: 'pipe' }
+    );
+    run('git', ['-C', sourceDir, 'checkout', '--detach', PINNED_SOURCE_COMMIT], { stdio: 'pipe' });
   }
+  const commit = String(
+    run('git', ['-C', sourceDir, 'rev-parse', 'HEAD'], { encoding: 'utf8' })
+  ).trim();
+  if (commit !== PINNED_SOURCE_COMMIT) throw new Error('Unexpected TON proxy source commit');
+  const dirty = String(
+    run('git', ['-C', sourceDir, 'status', '--porcelain'], { encoding: 'utf8' })
+  ).trim();
+  if (dirty) throw new Error('TON proxy source must be unmodified');
+  const destFile = path.join(targetDir, target.exe ? `${BINARY_NAME}.exe` : BINARY_NAME);
+  const tempFile = `${destFile}.build`;
+  run(
+    'go',
+    [
+      'build',
+      '-mod=readonly',
+      '-trimpath',
+      '-buildvcs=false',
+      '-ldflags',
+      `-s -w -X main.GitCommit=${PINNED_SOURCE_COMMIT}`,
+      '-o',
+      tempFile,
+      './cmd/proxy-cli',
+    ],
+    {
+      cwd: sourceDir,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        CGO_ENABLED: '0',
+        GOOS: { mac: 'darwin', win: 'windows', linux: 'linux' }[target.os],
+        GOARCH: target.arch === 'x64' ? 'amd64' : 'arm64',
+      },
+    }
+  );
+  if (!target.exe) fs.chmodSync(tempFile, 0o755);
+  fs.renameSync(tempFile, destFile);
+  return destFile;
 }
 
 async function main() {
   try {
     console.log(
-      `Fetching ${BINARY_NAME} ${RELEASE_TAG} (source ${PINNED_SOURCE_COMMIT.slice(0, 12)})...`
+      `Building ${BINARY_NAME} ${RELEASE_TAG} (source ${PINNED_SOURCE_COMMIT.slice(0, 12)})...`
     );
 
     const targets = selectedTargets(process.argv.slice(2));
@@ -165,7 +142,6 @@ async function main() {
       await installTarget(target);
     }
 
-    // Copy win-x64 to win-arm64 as emulation fallback
     const winX64Bin = path.join(OUTPUT_DIR, 'win-x64', `${BINARY_NAME}.exe`);
     const winArm64Dir = path.join(OUTPUT_DIR, 'win-arm64');
     const winArm64Bin = path.join(winArm64Dir, `${BINARY_NAME}.exe`);
@@ -178,7 +154,7 @@ async function main() {
       console.log('Copied win-x64 binary to win-arm64 (emulation fallback)');
     }
 
-    console.log('All downloads complete.');
+    console.log('All builds complete.');
     process.exit(0);
   } catch (err) {
     console.error('Error:', err);
@@ -191,11 +167,8 @@ if (require.main === module) {
 }
 
 module.exports = {
-  buildDownloadUrl,
   checkBinary,
-  downloadFile,
   installTarget,
-  sha256File,
   BINARY_NAME,
   PINNED_SOURCE_COMMIT,
   RELEASE_REPO,

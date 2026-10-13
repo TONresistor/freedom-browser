@@ -241,6 +241,7 @@ const DWEB_PROTOCOL_PRIVILEGES = {
 };
 protocol.registerSchemesAsPrivileged([
   { scheme: 'bzz', privileges: DWEB_PROTOCOL_PRIVILEGES },
+  { scheme: 'tonsite', privileges: DWEB_PROTOCOL_PRIVILEGES },
   { scheme: 'ipfs', privileges: DWEB_PROTOCOL_PRIVILEGES },
   { scheme: 'ipns', privileges: DWEB_PROTOCOL_PRIVILEGES },
   // ERC-8244 documents are single onchain HTML responses. They need a
@@ -689,7 +690,7 @@ async function bootstrap() {
     if (settings.enableTorIntegration && settings.startTorAtLaunch) {
       startTor({ targetSession: defaultSession });
     }
-    if (settings.startTonAtLaunch) {
+    if (settings.enableTonIntegration && settings.startTonAtLaunch) {
       startTon();
     }
   }

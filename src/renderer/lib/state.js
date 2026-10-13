@@ -144,12 +144,12 @@ export const state = {
   currentTorStatus: 'stopped',
   suppressTorRunningStatus: false,
 
-  // TON state
   currentTonStatus: 'stopped',
   suppressTonRunningStatus: false,
 
   // Feature flags
   enableTorIntegration: false,
+  enableTonIntegration: false,
   blockUnverifiedEns: true, // When true, unverified ENS resolutions route through an interstitial
 
   // Address-bar search provider id, synced from settings. buildSearchUrl in
@@ -214,6 +214,7 @@ export const setSearchProvider = (providerId, customProviders = []) => {
 // Sync renderer feature flags from a settings payload. Passing null (settings
 // unavailable) resets every flag to its default.
 export const applySettingsToState = (settings) => {
+  state.enableTonIntegration = settings?.enableTonIntegration === true;
   setTorIntegrationEnabled(settings?.enableTorIntegration === true);
   setBlockUnverifiedEns(settings?.blockUnverifiedEns !== false);
   setSearchProvider(settings?.searchProvider, settings?.customSearchProviders);

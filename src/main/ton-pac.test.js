@@ -13,14 +13,13 @@ describe('isTonHost', () => {
   test('suffix-boundary: .tonic.example', () => expect(isTonHost('foo.tonic.example')).toBe(false));
   test('falsy input', () => expect(isTonHost('')).toBe(false));
   test('null input', () => expect(isTonHost(null)).toBe(false));
-  test('.t.me host matches', () => expect(isTonHost('foo.t.me')).toBe(true));
-  // Bare t.me is the Telegram root domain (clearnet); only subdomains are TON-proxied.
+  test('.t.me host matches', () => expect(isTonHost('foo.t.me')).toBe(false));
   test('bare t.me is not a TON host', () => expect(isTonHost('t.me')).toBe(false));
 });
 
 test('TON_SUFFIXES contains the expected values', () => {
-  expect(TON_SUFFIXES).toEqual(expect.arrayContaining(['.ton', '.adnl', '.bag', '.t.me']));
-  expect(TON_SUFFIXES).toHaveLength(4);
+  expect(TON_SUFFIXES).toEqual(expect.arrayContaining(['.ton', '.adnl', '.bag']));
+  expect(TON_SUFFIXES).toHaveLength(3);
 });
 
 test('buildTonHostCondition uses the shared suffix list and no bare host alias', () => {

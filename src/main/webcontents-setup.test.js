@@ -536,11 +536,7 @@ describe('webcontents-setup', () => {
       preventDefault: jest.fn(),
     };
     contents.emit('will-navigate', tonEvent, 'tonsite://foundation.ton/');
-    expect(tonEvent.preventDefault).toHaveBeenCalled();
-    expect(parentWindow.webContents.send).toHaveBeenCalledWith(
-      'navigate-to-url',
-      'tonsite://foundation.ton/'
-    );
+    expect(tonEvent.preventDefault).not.toHaveBeenCalled();
 
     const tonAliasEvent = {
       preventDefault: jest.fn(),

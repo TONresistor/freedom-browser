@@ -13,6 +13,7 @@ let tonVersionText = null;
 let tonInfoPanel = null;
 let tonBinaryAvailable = true;
 let tonUiInitialized = false;
+let tonDisabledForProfile = false;
 
 const updateTonInfoVisibility = () => {
   if (!tonInfoPanel) return;
@@ -24,13 +25,13 @@ const updateTonInfoVisibility = () => {
   tonInfoPanel.classList.toggle('visible', visible);
 };
 
-const setToggleDisabled = (disabled) => {
+const setToggleDisabled = (disabled, reason = 'TON binary not found') => {
   if (!tonToggleBtn) return;
 
   if (disabled) {
     tonToggleBtn.classList.add('disabled');
     tonToggleBtn.setAttribute('disabled', 'true');
-    tonToggleBtn.setAttribute('title', 'TON binary not found');
+    tonToggleBtn.setAttribute('title', reason);
   } else {
     tonToggleBtn.classList.remove('disabled');
     tonToggleBtn.removeAttribute('disabled');
@@ -70,6 +71,12 @@ export const updateTonUi = (status, payload = {}) => {
   }
 
   state.currentTonStatus = status;
+  const disabledForProfile = payload.mode === 'disabled';
+  tonDisabledForProfile = disabledForProfile;
+  setToggleDisabled(
+    disabledForProfile || !tonBinaryAvailable,
+    disabledForProfile ? 'Disabled for this profile under Settings → Nodes' : 'TON binary not found'
+  );
 
   updateTonStatusLine();
   updateTonInfoVisibility();
@@ -104,7 +111,14 @@ export const updateTonUi = (status, payload = {}) => {
   updateTonInfoVisibility();
 };
 
+const updateTonSectionVisibility = () => {
+  document
+    .getElementById('ton-nodes-section')
+    ?.classList.toggle('hidden', !state.enableTonIntegration);
+};
+
 export const initTonUi = () => {
+  updateTonSectionVisibility();
   tonToggleBtn = document.getElementById('ton-toggle-btn');
   tonToggleSwitch = document.getElementById('ton-toggle-switch');
   tonStatusRow = document.getElementById('ton-status-row');
@@ -119,7 +133,12 @@ export const initTonUi = () => {
       .checkBinary()
       .then(({ available }) => {
         tonBinaryAvailable = available;
-        setToggleDisabled(!available);
+        setToggleDisabled(
+          !available || tonDisabledForProfile,
+          tonDisabledForProfile
+            ? 'Disabled for this profile under Settings → Nodes'
+            : 'TON binary not found'
+        );
         if (!available) pushDebug('TON binary not found - toggle disabled');
       })
       .catch((err) => {
@@ -134,9 +153,13 @@ export const initTonUi = () => {
 
   if (!tonUiInitialized) {
     tonUiInitialized = true;
+    window.addEventListener('settings:updated', (event) => {
+      state.enableTonIntegration = event.detail?.enableTonIntegration === true;
+      updateTonSectionVisibility();
+    });
 
     tonToggleBtn?.addEventListener('click', () => {
-      if (!tonBinaryAvailable) return;
+      if (!tonBinaryAvailable || tonDisabledForProfile || !state.enableTonIntegration) return;
 
       if (state.currentTonStatus === 'running' || state.currentTonStatus === 'starting') {
         state.suppressTonRunningStatus = true;

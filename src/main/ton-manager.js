@@ -6,8 +6,10 @@ const fs = require('fs');
 const http = require('http');
 const net = require('net');
 const IPC = require('../shared/ipc-channels');
-const { applyTonProxy, clearTonProxy } = require('./tor-proxy');
+const { registerTonProtocol } = require('./ton-protocol');
+const { loadSettings, onSettingsChanged } = require('./settings-store');
 const { getTonDataDir } = require('./profile-paths');
+const { getActiveProfile } = require('./profile-resolver');
 const { registerWebRequestHandler } = require('./webrequest-dispatcher');
 const { isTonHost } = require('../shared/ton-suffixes');
 const {
@@ -43,14 +45,11 @@ let pendingStopError = null;
 let startGeneration = 0;
 const proxySessions = new Map();
 const routedSessions = new WeakSet();
-let appliedProxyEndpoint = null;
-let routingGeneration = 0;
 let routingCleanupPromise = Promise.resolve();
 let requestGuardRegistered = false;
 
 let currentProxyPort = DEFAULTS.ton.proxyPort;
 let currentMode = MODE.NONE;
-// Cached at module load for the hot status-payload path; refreshed on explicit checkBinary() IPC call.
 let _binaryExists = null;
 
 function getTonBinaryPath() {
@@ -115,15 +114,11 @@ function probeTonProxy(port) {
       port,
       path: '/',
       method: 'HEAD',
-      // The proxy runs with -no-http, so a non-TON host is rejected locally
-      // and immediately. Any HTTP response proves the listener is alive
-      // without making startup depend on TON DNS or an external site.
       headers: { Host: 'freedom-proxy-check.invalid' },
       timeout: 5000,
     };
 
     const req = http.request(options, (res) => {
-      // Any response (even 502) means the proxy is alive
       res.resume();
       resolve(true);
     });
@@ -147,60 +142,54 @@ function updateState(newState, error = null) {
     try {
       win.webContents.send(IPC.TON_STATUS_UPDATE, buildStatusPayload());
     } catch {
-      // Window may be closing.
+      continue;
     }
   }
-}
-
-async function applyTonRouting(proxyEndpoint) {
-  routingGeneration += 1;
-  const generation = routingGeneration;
-  appliedProxyEndpoint = proxyEndpoint;
-  await Promise.all(
-    [...proxySessions.values()].map(async (targetSession) => {
-      await applyTonProxy(targetSession, proxyEndpoint);
-      if (generation === routingGeneration && appliedProxyEndpoint === proxyEndpoint) {
-        routedSessions.add(targetSession);
-      }
-    })
-  );
-}
-
-async function clearTonRouting() {
-  routingGeneration += 1;
-  appliedProxyEndpoint = null;
-  for (const targetSession of proxySessions.values()) routedSessions.delete(targetSession);
-  await Promise.all(
-    [...proxySessions.values()].map((targetSession) => clearTonProxy(targetSession))
-  );
-  for (const targetSession of proxySessions.values()) routedSessions.delete(targetSession);
 }
 
 function registerTonRoutingSession(key, targetSession) {
   if (!key || !targetSession) return;
   proxySessions.set(key, targetSession);
-  if (!appliedProxyEndpoint) return;
-  const proxyEndpoint = appliedProxyEndpoint;
-  const generation = routingGeneration;
-  applyTonProxy(targetSession, proxyEndpoint)
-    .then(() => {
-      if (
-        generation === routingGeneration &&
-        appliedProxyEndpoint === proxyEndpoint &&
-        proxySessions.get(key) === targetSession
-      ) {
-        routedSessions.add(targetSession);
-      }
-    })
-    .catch((err) => {
-      log.error(`[TON] Failed to apply routing to session ${key}:`, err.message);
-    });
+  routedSessions.add(targetSession);
+  registerTonProtocol(targetSession, { getProxyUrl });
 }
 
 function unregisterTonRoutingSession(key) {
   const targetSession = proxySessions.get(key);
   if (targetSession) routedSessions.delete(targetSession);
   proxySessions.delete(key);
+}
+
+function isDisabledForProfile() {
+  return getActiveProfile()?.metadata?.nodes?.ton?.mode === 'disabled';
+}
+
+function clearTonServiceEntry() {
+  if (isDisabledForProfile()) {
+    currentMode = MODE.DISABLED;
+    updateService('ton', { proxy: null, mode: MODE.DISABLED });
+    setStatusMessage('ton', 'Disabled for this profile');
+  } else {
+    currentMode = MODE.NONE;
+    clearService('ton');
+  }
+}
+
+async function syncProfileMode() {
+  if (isDisabledForProfile()) await stopTon();
+  if (currentState === STATUS.STOPPED) {
+    clearTonServiceEntry();
+    updateState(STATUS.STOPPED);
+  }
+  return buildStatusPayload();
+}
+
+function getProxyUrl() {
+  return loadSettings().enableTonIntegration === true &&
+    !isDisabledForProfile() &&
+    currentState === STATUS.RUNNING
+    ? `http://127.0.0.1:${currentProxyPort}`
+    : null;
 }
 
 function guardTonRequest(details = {}) {
@@ -210,7 +199,10 @@ function guardTonRequest(details = {}) {
   } catch {
     return null;
   }
-  if (!['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol) || !isTonHost(parsed.hostname)) {
+  if (
+    !['http:', 'https:', 'ws:', 'wss:'].includes(parsed.protocol) ||
+    !isTonHost(parsed.hostname)
+  ) {
     return null;
   }
 
@@ -224,22 +216,29 @@ function guardTonRequest(details = {}) {
   } catch {
     return { cancel: true };
   }
-  return requestContents?.session && routedSessions.has(requestContents.session)
-    ? null
-    : { cancel: true };
+  if (!requestContents?.session || !routedSessions.has(requestContents.session) || !getProxyUrl()) {
+    return { cancel: true };
+  }
+  if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+    return { redirectURL: `tonsite://${parsed.host}${parsed.pathname}${parsed.search}` };
+  }
+  return { cancel: true };
 }
 
 function registerTonRequestGuard() {
   if (requestGuardRegistered) return;
   requestGuardRegistered = true;
-  registerWebRequestHandler('onBeforeRequest', 'ton-routing-guard', guardTonRequest);
+  registerWebRequestHandler('onBeforeRequest', 'ton-routing-guard', guardTonRequest, {
+    failClosed: true,
+  });
 }
 
 function buildStatusPayload() {
   const running = currentState === STATUS.RUNNING;
   return {
+    enabled: loadSettings().enableTonIntegration === true,
     status: currentState,
-    mode: currentMode === MODE.NONE ? 'none' : currentMode,
+    mode: isDisabledForProfile() ? MODE.DISABLED : currentMode,
     proxyUrl: running ? `http://127.0.0.1:${currentProxyPort}` : null,
     proxyPort: running ? currentProxyPort : null,
     version: running ? RELEASE_TAG : null,
@@ -282,6 +281,7 @@ function startHealthCheck() {
 }
 
 async function startTon() {
+  if (loadSettings().enableTonIntegration !== true || isDisabledForProfile()) return;
   if (currentState === STATUS.RUNNING || currentState === STATUS.STARTING) {
     log.info(`[TON] Ignoring start request, current state: ${currentState}`);
     return;
@@ -346,9 +346,6 @@ async function startTon() {
   log.info(`[TON] Starting: ${binPath} ${args.join(' ')}`);
 
   try {
-    // Do not persist child output: Tonutils warnings may include the requested
-    // hostname, including one opened from a private window. Lifecycle and
-    // health are tracked independently below.
     const child = spawn(binPath, args, { cwd: getTonDataDir(), stdio: 'ignore' });
     tonProcess = child;
 
@@ -375,24 +372,14 @@ async function startTon() {
       const terminalError = pendingStopError;
       pendingStopError = null;
       const deliberateStop = currentState === STATUS.STOPPING && !terminalError;
-      const routingWasApplied = Boolean(appliedProxyEndpoint);
 
       if (deliberateStop) {
-        routingCleanupPromise = clearTonRouting().catch((err) => {
-          log.error('[TON] Failed to clear session routing:', err);
-        });
-        clearService('ton');
-        currentMode = MODE.NONE;
+        routingCleanupPromise = Promise.resolve();
+        clearTonServiceEntry();
         updateState(STATUS.STOPPED);
       } else {
-        // Keep an already-applied PAC pointed at the now-dead local port. TON
-        // names then fail closed instead of falling through to the system DNS
-        // resolver after a crash. A deliberate stop (or app shutdown) clears it.
         routingCleanupPromise = Promise.resolve();
-        if (!routingWasApplied) {
-          clearService('ton');
-          currentMode = MODE.NONE;
-        }
+        clearTonServiceEntry();
         const errorMessage = terminalError || `TON proxy exited with code ${code}`;
         setErrorState('ton', 'TON proxy unavailable');
         updateState(STATUS.ERROR, errorMessage);
@@ -414,7 +401,7 @@ async function startTon() {
       }
       startupProbeInFlight = false;
       currentMode = MODE.NONE;
-      clearService('ton');
+      clearTonServiceEntry();
       updateState(STATUS.ERROR, err.message);
       setStatusMessage('ton', 'Proxy failed to start');
     });
@@ -448,21 +435,6 @@ async function startTon() {
         clearInterval(startupPollInterval);
         startupPollInterval = null;
 
-        try {
-          await applyTonRouting(`127.0.0.1:${currentProxyPort}`);
-        } catch (err) {
-          if (superseded()) return;
-          log.error('[TON] Failed to apply session routing:', err);
-          pendingStopError = 'Failed to apply TON proxy';
-          setStatusMessage('ton', 'Proxy failed to start');
-          updateState(STATUS.ERROR, pendingStopError);
-          void stopTon({ preserveError: true });
-          return;
-        }
-        if (superseded() || tonProcess !== child) {
-          return;
-        }
-
         updateService('ton', {
           proxy: `http://127.0.0.1:${currentProxyPort}`,
           mode: MODE.BUNDLED,
@@ -490,7 +462,7 @@ async function startTon() {
     }, 3000);
   } catch (err) {
     currentMode = MODE.NONE;
-    clearService('ton');
+    clearTonServiceEntry();
     updateState(STATUS.ERROR, err.message);
     setStatusMessage('ton', 'Proxy failed to start');
   }
@@ -514,12 +486,9 @@ function stopTon(options = {}) {
       }
       healthCheckGeneration += 1;
       healthCheckInFlight = false;
-      routingCleanupPromise = clearTonRouting().catch((err) => {
-        log.error('[TON] Failed to clear session routing:', err);
-      });
+      routingCleanupPromise = Promise.resolve();
       if (!preserveError) updateState(STATUS.STOPPED);
-      clearService('ton');
-      currentMode = MODE.NONE;
+      clearTonServiceEntry();
       routingCleanupPromise.finally(resolve);
       return;
     }
@@ -566,6 +535,10 @@ function checkBinary() {
 }
 
 function registerTonIpc() {
+  void syncProfileMode();
+  onSettingsChanged((settings) => {
+    if (settings.enableTonIntegration !== true) void stopTon();
+  });
   ipcMain.handle(IPC.TON_START, async () => {
     await startTon();
     return buildStatusPayload();
@@ -586,6 +559,8 @@ function registerTonIpc() {
 }
 
 module.exports = {
+  syncProfileMode,
+  getProxyUrl,
   registerTonIpc,
   startTon,
   stopTon,

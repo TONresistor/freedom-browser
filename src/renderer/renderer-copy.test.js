@@ -206,8 +206,7 @@ describe('Nodes menu section labels (#323)', () => {
   test('every section is labelled with the bare product name', () => {
     // "Tor (.onion)" was the one qualified label in the menu. The qualifier
     // belongs on the Settings row that turns the integration on, not on a
-    // section header sitting next to Swarm, IPFS, Ethereum, Gnosis, Radicle,
-    // Tor, and TON.
+    // section header sitting next to Swarm, IPFS, Ethereum, Gnosis, Radicle.
     expect(sectionLabels()).toEqual([
       'Swarm',
       'IPFS',
@@ -327,7 +326,6 @@ describe('error page heading case (#260)', () => {
   });
 
   test('TON retry links stay allowlisted and point users to the Nodes menu', () => {
-    expect(errorHtml).toContain("'ton:'");
     expect(errorHtml).toContain("'tonsite:'");
     expect(errorHtml).toContain('The TON proxy is not running. Open the Nodes menu');
   });

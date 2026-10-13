@@ -1,14 +1,7 @@
 jest.mock('./logger', () => ({ info: jest.fn(), warn: jest.fn(), error: jest.fn() }));
 
 const log = require('./logger');
-const {
-  buildScopedPacScript,
-  buildOnionPacScript,
-  applyOnionProxy,
-  clearOnionProxy,
-  applyTonProxy,
-  clearTonProxy,
-} = require('./tor-proxy');
+const { buildOnionPacScript, applyOnionProxy, clearOnionProxy } = require('./tor-proxy');
 
 // Compile the PAC text into a callable FindProxyForURL, supplying the
 // `dnsDomainIs` built-in that Chromium provides to PAC scripts (it isn't a
@@ -42,28 +35,6 @@ describe('buildOnionPacScript', () => {
   test('embeds the provided host:port', () => {
     const custom = buildOnionPacScript('127.0.0.1:9999');
     expect(custom).toContain('127.0.0.1:9999');
-  });
-});
-
-describe('buildScopedPacScript', () => {
-  test('composes TON and Tor without routing clearnet through either proxy', () => {
-    const find = compilePac(
-      buildScopedPacScript({
-        socksHostPort: '127.0.0.1:9150',
-        tonProxyHostPort: '127.0.0.1:18085',
-      })
-    );
-
-    expect(find('http://foundation.ton/', 'foundation.ton')).toBe('PROXY 127.0.0.1:18085');
-    expect(find('http://foundation.ton./', 'foundation.ton.')).toBe('PROXY 127.0.0.1:18085');
-    expect(find('http://site.adnl/', 'site.adnl')).toBe('PROXY 127.0.0.1:18085');
-    expect(find('http://archive.bag/', 'archive.bag')).toBe('PROXY 127.0.0.1:18085');
-    expect(find('http://name.t.me/', 'name.t.me')).toBe('PROXY 127.0.0.1:18085');
-    expect(find('http://hidden.onion/', 'hidden.onion')).toBe('SOCKS5 127.0.0.1:9150');
-    expect(find('https://example.com/', 'example.com')).toBe('DIRECT');
-    expect(find('http://127.0.0.1:1633/bzz/abc', '127.0.0.1')).toBe('DIRECT');
-    expect(find('http://foo.tonic.example/', 'foo.tonic.example')).toBe('DIRECT');
-    expect(find('https://t.me/', 't.me')).toBe('DIRECT');
   });
 });
 
@@ -102,45 +73,5 @@ describe('applyOnionProxy / clearOnionProxy', () => {
   test('no-ops gracefully when session has no setProxy', async () => {
     await expect(applyOnionProxy(null, '127.0.0.1:9150')).resolves.toBeUndefined();
     await expect(clearOnionProxy({})).resolves.toBeUndefined();
-  });
-
-  test('clearing Tor preserves an active TON route', async () => {
-    const targetSession = {
-      setProxy: jest.fn().mockResolvedValue(undefined),
-      forceReloadProxyConfig: jest.fn().mockResolvedValue(undefined),
-      closeAllConnections: jest.fn().mockResolvedValue(undefined),
-      resolveProxy: jest.fn().mockResolvedValue('PROXY 127.0.0.1:18085'),
-    };
-
-    await applyTonProxy(targetSession, '127.0.0.1:18085');
-    await applyOnionProxy(targetSession, '127.0.0.1:9150');
-    await clearOnionProxy(targetSession);
-
-    const finalConfig = targetSession.setProxy.mock.calls.at(-1)[0];
-    expect(finalConfig.mode).toBe('pac_script');
-    const pac = Buffer.from(finalConfig.pacScript.split(',')[1], 'base64').toString('utf8');
-    const find = compilePac(pac);
-    expect(find('http://foundation.ton/', 'foundation.ton')).toBe('PROXY 127.0.0.1:18085');
-    expect(find('http://hidden.onion/', 'hidden.onion')).toBe('DIRECT');
-  });
-
-  test('clearing TON preserves an active Tor route', async () => {
-    const targetSession = {
-      setProxy: jest.fn().mockResolvedValue(undefined),
-      forceReloadProxyConfig: jest.fn().mockResolvedValue(undefined),
-      closeAllConnections: jest.fn().mockResolvedValue(undefined),
-      resolveProxy: jest.fn().mockResolvedValue('SOCKS5 127.0.0.1:9150'),
-    };
-
-    await applyOnionProxy(targetSession, '127.0.0.1:9150');
-    await applyTonProxy(targetSession, '127.0.0.1:18085');
-    await clearTonProxy(targetSession);
-
-    const finalConfig = targetSession.setProxy.mock.calls.at(-1)[0];
-    expect(finalConfig.mode).toBe('pac_script');
-    const pac = Buffer.from(finalConfig.pacScript.split(',')[1], 'base64').toString('utf8');
-    const find = compilePac(pac);
-    expect(find('http://foundation.ton/', 'foundation.ton')).toBe('DIRECT');
-    expect(find('http://hidden.onion/', 'hidden.onion')).toBe('SOCKS5 127.0.0.1:9150');
   });
 });

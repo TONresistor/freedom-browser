@@ -3,13 +3,8 @@ import { cidV0ToV1Base32, cidV1B58btcToBase32, ipnsMhToCidV1Base36 } from './cid
 
 export const ensureTrailingSlash = (value = '') => (value.endsWith('/') ? value : `${value}/`);
 
-export const TON_SUFFIXES = ['.ton', '.adnl', '.bag', '.t.me'];
-
-export const isTonHost = (host) => {
-  if (typeof host !== 'string' || !host) return false;
-  const normalized = host.toLowerCase().replace(/\.$/, '');
-  return TON_SUFFIXES.some((suffix) => normalized.endsWith(suffix));
-};
+import { TON_SUFFIXES, isTonHost } from '../../shared/ton-suffixes.js';
+export { TON_SUFFIXES, isTonHost };
 
 export const parseTonInput = (input) => {
   const raw = typeof input === 'string' ? input.trim() : '';
@@ -22,14 +17,20 @@ export const parseTonInput = (input) => {
   } catch {
     return null;
   }
-  if (parsed.username || parsed.password || !isTonHost(parsed.hostname)) return null;
+  if (
+    parsed.port ||
+    parsed.username ||
+    parsed.password ||
+    !isTonHost(parsed.hostname, /^tonsite:\/\//i.test(raw))
+  )
+    return null;
 
   const hostname = parsed.hostname.replace(/\.$/, '');
   const host = parsed.port ? `${hostname}:${parsed.port}` : hostname;
   const tail = `${parsed.pathname}${parsed.search}${parsed.hash}`;
   const displayTail = tail === '/' ? '' : tail;
   return {
-    targetUrl: `http://${host}${tail}`,
+    targetUrl: `tonsite://${host}${tail}`,
     displayValue: `tonsite://${host}${displayTail}`,
   };
 };
@@ -557,11 +558,6 @@ export const deriveDisplayValue = (
   if (radicleApiPrefix && url.startsWith(radicleApiPrefix)) {
     const decoded = decodeAndTrim(url.slice(radicleApiPrefix.length));
     return decoded ? `rad://${decoded}` : '';
-  }
-
-  if (/^https?:\/\//i.test(url)) {
-    const tonTarget = parseTonInput(url);
-    if (tonTarget) return tonTarget.displayValue;
   }
 
   return url;

@@ -814,12 +814,6 @@ const getRawDwebHref = (anchor) => {
   return null;
 };
 
-const isTonSiteUrl = (url) => {
-  if (!url || !['ton:', 'tonsite:'].includes(url.protocol)) return false;
-  const host = url.hostname.toLowerCase().replace(/\.$/, '');
-  return ['.ton', '.adnl', '.bag', '.t.me'].some((suffix) => host.endsWith(suffix));
-};
-
 const getHostRoutedHref = (anchor) => {
   const rawHref = anchor?.getAttribute?.('href')?.trim();
   if (!rawHref) return null;
@@ -835,14 +829,14 @@ const getHostRoutedHref = (anchor) => {
           'http:',
           'https:',
           'bzz:',
+          'tonsite:',
           'ipfs:',
           'ipns:',
           'rad:',
           'ens:',
           'freedom:',
           'ethereum:',
-        ].includes(resolved.protocol) ||
-        isTonSiteUrl(resolved)
+        ].includes(resolved.protocol)
       ) {
         return resolved.toString();
       }

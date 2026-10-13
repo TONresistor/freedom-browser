@@ -78,7 +78,7 @@ const isHttpsTonNavigation = (rawUrl) => {
 const isTonCustomNavigation = (rawUrl) => {
   try {
     const parsed = new URL(rawUrl);
-    return ['ton:', 'tonsite:'].includes(parsed.protocol) && isTonHost(parsed.hostname);
+    return parsed.protocol === 'ton:' && isTonHost(parsed.hostname);
   } catch {
     return false;
   }
@@ -353,7 +353,7 @@ function registerWebContentsHandlers() {
       });
 
       // Intercept navigation to custom protocols (freedom://, bzz://, ipfs://,
-      // ipns://, web3://, rad:, TON Site names, ethereum:, ens://). `ens://` is included so legacy
+      // ipns://, web3://, rad:, ethereum:, ens://). `ens://` is included so legacy
       // links inside pages route through the renderer's ENS resolver instead
       // of failing as an unknown scheme — bookmarks created before the
       // transport-aware migration still carry the legacy prefix.

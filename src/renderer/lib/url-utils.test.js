@@ -34,7 +34,7 @@ const HOME_URL = 'file:///app/home.html';
 
 describe('url-utils', () => {
   describe('TON Sites URLs', () => {
-    test.each(['example.ton', 'site.adnl', 'archive.bag', 'name.t.me'])(
+    test.each(['example.ton', 'site.adnl', 'archive.bag'])(
       'recognizes %s as a TON host',
       (host) => expect(isTonHost(host)).toBe(true)
     );
@@ -44,21 +44,29 @@ describe('url-utils', () => {
       (host) => expect(isTonHost(host)).toBe(false)
     );
 
+    test('Telegram hosts require the explicit tonsite scheme', () => {
+      for (const value of ['name.t.me', 'https://name.t.me', 'http://name.t.me', 'ton://name.t.me']) {
+        expect(parseTonInput(value)).toBeNull();
+      }
+      expect(parseTonInput('tonsite://name.t.me/docs')?.targetUrl).toBe('tonsite://name.t.me/docs');
+      expect(parseTonInput('tonsite://example.ton:8080/')).toBeNull();
+    });
+
     test('normalizes supported input forms to HTTP transport and tonsite display', () => {
       expect(parseTonInput('tonsite://Example.TON/docs?q=1#top')).toEqual({
-        targetUrl: 'http://example.ton/docs?q=1#top',
+        targetUrl: 'tonsite://example.ton/docs?q=1#top',
         displayValue: 'tonsite://example.ton/docs?q=1#top',
       });
       expect(parseTonInput('https://example.ton/')).toEqual({
-        targetUrl: 'http://example.ton/',
+        targetUrl: 'tonsite://example.ton/',
         displayValue: 'tonsite://example.ton',
       });
       expect(parseTonInput('ton://foundation.ton/')).toEqual({
-        targetUrl: 'http://foundation.ton/',
+        targetUrl: 'tonsite://foundation.ton/',
         displayValue: 'tonsite://foundation.ton',
       });
       expect(parseTonInput('foundation.ton./docs')).toEqual({
-        targetUrl: 'http://foundation.ton/docs',
+        targetUrl: 'tonsite://foundation.ton/docs',
         displayValue: 'tonsite://foundation.ton/docs',
       });
     });
